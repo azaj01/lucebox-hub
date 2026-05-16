@@ -385,7 +385,7 @@ GenerateResult Qwen35Backend::restore_and_generate(int slot,
 int Qwen35Backend::do_prefill(const std::vector<int32_t> & tokens,
                                const DaemonIO & io,
                                int snap_pos, int snap_slot) {
-    (void)io; (void)snap_pos; (void)snap_slot;
+    (void)io;
 
     const int hidden = w_.n_embd;
     const int PREFILL_UBATCH = 512;
@@ -401,8 +401,21 @@ int Qwen35Backend::do_prefill(const std::vector<int32_t> & tokens,
     // Chunked prefill
     std::vector<float> embed_buf((size_t)hidden * PREFILL_UBATCH);
     int committed = 0;
-    for (int start = 0; start < prompt_len; start += PREFILL_UBATCH) {
-        const int n_tokens = std::min(PREFILL_UBATCH, prompt_len - start);
+    for (int start = 0; start < prompt_len;) {
+        if (snap_pos >= 0 && snap_slot >= 0 && snap_pos == start) {
+            cache_.cur_pos = start;
+            if (snapshot_save(snap_slot)) {
+                std::printf("[snap] inline slot=%d cur_pos=%d\n", snap_slot, start);
+                std::fflush(stdout);
+            }
+            snap_pos = -1;
+            snap_slot = -1;
+        }
+
+        int n_tokens = std::min(PREFILL_UBATCH, prompt_len - start);
+        if (snap_pos > start && snap_pos < start + n_tokens) {
+            n_tokens = snap_pos - start;
+        }
         const bool with_mask = (cfg_.kq_stride_pad > KQ_MASK_PAD) || (n_tokens > 1);
 
         if (!build_target_step(sg_, w_, cache_, target_backend_,
@@ -453,24 +466,31 @@ int Qwen35Backend::do_prefill(const std::vector<int32_t> & tokens,
             return -1;
         }
 
-        // Snapshot at boundary if requested
-        if (snap_pos >= 0 && snap_slot >= 0 &&
-            start + n_tokens >= snap_pos && start < snap_pos) {
-            // Not at boundary yet — next chunk will cross it
-        } else if (snap_pos >= 0 && snap_slot >= 0 &&
-                   start + n_tokens == snap_pos) {
-            cache_.cur_pos = snap_pos;
-            snapshot_save(snap_slot);
-        }
+        int32_t last_tok = -1;
+        const size_t argmax_off =
+            (start + n_tokens < prompt_len) ? 0 : sizeof(int32_t) * (size_t)(n_tokens - 1);
+        ggml_backend_tensor_get(sg_.argmax_tokens, &last_tok, argmax_off, sizeof(int32_t));
+        cache_.last_tok = last_tok;
 
         committed = start + n_tokens;
         cache_.cur_pos = committed;
+
+        if (snap_pos >= 0 && snap_slot >= 0 && committed == snap_pos) {
+            if (snapshot_save(snap_slot)) {
+                std::printf("[snap] inline slot=%d cur_pos=%d\n", snap_slot, committed);
+                std::fflush(stdout);
+            }
+            snap_pos = -1;
+            snap_slot = -1;
+        }
 
         // Sync feature mirror if active
         if (feature_mirror_.target_feat && !draft_parked_) {
             draft_feature_mirror_sync_range(cache_.target_feat, cache_.target_feat_cap,
                                             feature_mirror_, start, n_tokens);
         }
+
+        start = committed;
     }
 
     return committed;

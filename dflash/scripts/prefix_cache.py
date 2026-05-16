@@ -94,6 +94,21 @@ class DaemonStdoutBus:
         """Invoke ``cb()`` whenever the daemon emits a stdout line starting with ``prefix``."""
         self._line_callbacks[prefix] = cb
 
+    def register_waiter(self, prefix: str) -> tuple[tuple[str, asyncio.Future], asyncio.Future]:
+        """Synchronously register a waiter before issuing a daemon command."""
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str] = loop.create_future()
+        entry = (prefix, fut)
+        self._waiters.append(entry)
+        return entry, fut
+
+    def remove_waiter(self, entry: tuple[str, asyncio.Future]) -> None:
+        """Best-effort waiter cleanup for cancelled / abandoned requests."""
+        try:
+            self._waiters.remove(entry)
+        except ValueError:
+            pass
+
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         self._task = loop.create_task(self._run())
 
@@ -135,17 +150,13 @@ class DaemonStdoutBus:
 
     async def await_reply(self, prefix: str, timeout: float = 10.0) -> str:
         """Block until daemon emits a line starting with *prefix*."""
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[str] = loop.create_future()
-        entry = (prefix, fut)
-        self._waiters.append(entry)
+        entry, fut = self.register_waiter(prefix)
         try:
             return await asyncio.wait_for(fut, timeout=timeout)
         finally:
             # On timeout / cancellation the matcher loop never popped us;
             # remove ourselves so _waiters doesn't grow without bound.
-            try: self._waiters.remove(entry)
-            except ValueError: pass
+            self.remove_waiter(entry)
 
 
 @dataclass
