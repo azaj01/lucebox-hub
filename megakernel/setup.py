@@ -17,8 +17,7 @@ def _detect_arch():
             return f"sm_{major}{minor}"
     except Exception:
         pass
-    # Pascal fallback — most common Pascal card is GTX 1080 Ti (sm_61)
-    return "sm_61"
+    return "sm_75"
 
 
 def _int_env(name, default):
