@@ -26,6 +26,7 @@ Usage:
 """
 import argparse
 import json
+import re
 import sys
 import time
 import urllib.request
@@ -34,6 +35,7 @@ from pathlib import Path
 
 # Allow importing bench_he for its PROMPTS list.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bench_llm import _extract_boxed, _normalize_math, _math_equiv
 
 N_SAMPLE = 10
 N_GEN_DEFAULT = 256
@@ -181,18 +183,69 @@ def _load_math500(n_sample: int):
     ]
 
 
+def _score_math_text(text: str, gold_answer: str) -> tuple[bool, str]:
+    """Score a math response text against the gold answer.
+
+    Extracts \\boxed{} answers (after </think> for thinking models),
+    with fallbacks for **bold** and $...$ patterns.
+    Returns (correct, detail_str).
+    """
+    think_end = text.rfind("</think>")
+    answer_text = text[think_end + len("</think>"):] if think_end >= 0 else text
+
+    pred = _extract_boxed(answer_text)
+    if not pred:
+        pred = _extract_boxed(text)
+
+    # Fallback: "the answer is **X**" patterns
+    if pred is None:
+        bold_pattern = re.compile(
+            r'(?:answer\s+is|there\s+are|result\s+is|equals?|=)\s*\*\*(.+?)\*\*',
+            re.IGNORECASE)
+        m = bold_pattern.search(answer_text)
+        if m:
+            pred = m.group(1).strip().rstrip(".")
+
+    # Fallback: last $...$ expression
+    if pred is None:
+        matches = re.findall(r'\$([^$]+)\$', answer_text)
+        if matches:
+            pred = matches[-1].strip()
+
+    correct = _math_equiv(pred, gold_answer)
+    pred_short = (pred[:60] + "…") if pred and len(pred) > 60 else pred
+    gold_short = (gold_answer[:60] + "…") if len(gold_answer) > 60 else gold_answer
+    if correct:
+        detail = f"🎯 {pred_short}"
+    elif pred:
+        detail = f"✗ pred={pred_short} gold={gold_short}"
+    else:
+        detail = f"✗ no answer found, gold={gold_short}"
+    return correct, detail
+
+
 def workload_math500(url: str, n_sample: int, n_gen: int, thinking: bool = False, **_kw):
     rows = _load_math500(n_sample)
     gen = max(n_gen, N_GEN_MATH)  # Math needs longer generation
     results = []
+    n_correct, n_scored = 0, 0
     for row in rows:
         msgs = [{"role": "user", "content": row["prompt"]}]
         try:
             r = stream_chat(url, msgs, gen, thinking=thinking)
+            correct, detail = _score_math_text(r["text"], row["answer"])
+            r["correct"] = correct
+            r["score_detail"] = detail
+            n_scored += 1
+            if correct:
+                n_correct += 1
             results.append({"name": row["name"], **r})
-            _print_row(row["name"], r)
+            _print_row(row["name"], r, score=detail)
         except Exception as e:
             print(f"  {row['name']:28s}  FAILED: {e}", flush=True)
+    if n_scored:
+        pct = n_correct / n_scored * 100
+        print(f"\n  accuracy: {n_correct}/{n_scored} ({pct:.0f}%)")
     return results
 
 
@@ -299,14 +352,15 @@ def _print_header():
     print("  " + "-" * 80)
 
 
-def _print_row(name: str, r: dict):
+def _print_row(name: str, r: dict, score: str = ""):
     n = r["n_tok"]
+    suffix = f"  {score}" if score else ""
     if n == 0:
-        print(f"  {name:28s}  {n:5d} {r['wall_s']:7.2f}   --       --       --         --",
+        print(f"  {name:28s}  {n:5d} {r['wall_s']:7.2f}   --       --       --         --{suffix}",
               flush=True)
         return
     print(f"  {name:28s}  {n:5d} {r['wall_s']:7.2f} {r['ttft_s']:7.3f} "
-          f"{r['decode_s']:7.2f} {r['decode_tps']:8.2f} {r['wall_tps']:9.2f}",
+          f"{r['decode_s']:7.2f} {r['decode_tps']:8.2f} {r['wall_tps']:9.2f}{suffix}",
           flush=True)
 
 
