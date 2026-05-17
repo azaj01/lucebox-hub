@@ -195,6 +195,7 @@ set(DFLASH27B_SRC_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/laguna
     ${CMAKE_CURRENT_SOURCE_DIR}/src/qwen3
     ${CMAKE_CURRENT_SOURCE_DIR}/src/gemma4
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server
 )
 
 add_library(dflash27b STATIC
@@ -239,9 +240,13 @@ add_library(dflash27b STATIC
     src/common/sampler.cpp
     src/common/daemon_loop.cpp
     src/common/gguf_inspect.cpp
+    src/common/backend_factory.cpp
     src/common/layer_split_utils.cpp
     src/common/ddtree.cpp
     src/common/peer_access.cpp
+    # ── Server components (tokenizer, chat template) ──
+    src/server/tokenizer.cpp
+    src/server/chat_template.cpp
 )
 # BSA (Block-Sparse Attention) backs the speculative-prefill drafter scoring
 # path. Default ON so prefill is fast out of the box. Turn OFF if you don't
@@ -592,6 +597,29 @@ if(DFLASH27B_TESTS)
         find_package(OpenMP)
         if(OpenMP_CXX_FOUND)
             target_link_libraries(test_dflash PRIVATE OpenMP::OpenMP_CXX)
+        endif()
+    endif()
+
+    # ─── dflash_server: native C++ HTTP server ─────────────────────────
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/server/server_main.cpp")
+        add_executable(dflash_server
+            src/server/server_main.cpp
+            src/server/http_server.cpp
+        )
+        target_include_directories(dflash_server PRIVATE ${DFLASH27B_SRC_INCLUDE_DIRS})
+        if(DFLASH27B_GPU_BACKEND STREQUAL "hip")
+            target_compile_definitions(dflash_server PRIVATE DFLASH27B_BACKEND_HIP=1 GGML_USE_HIP)
+        else()
+            target_compile_definitions(dflash_server PRIVATE
+                DFLASH27B_BACKEND_CUDA=1
+                DFLASH27B_CUDA_MIN_SM=${_dflash27b_cuda_min_sm})
+        endif()
+        target_link_libraries(dflash_server PRIVATE dflash27b ggml ${DFLASH27B_GGML_BACKEND_TARGET} pthread)
+        if(DFLASH27B_GPU_BACKEND STREQUAL "cuda")
+            find_package(CUDAToolkit REQUIRED)
+            target_link_libraries(dflash_server PRIVATE CUDA::cudart)
+        else()
+            target_link_libraries(dflash_server PRIVATE hip::host)
         endif()
     endif()
 
