@@ -233,7 +233,7 @@ def parse_reasoning(
 
 def _thinking_enabled(template_kwargs: dict | None) -> bool:
     """Return whether Qwen think blocks are enabled for this rendered prompt."""
-    return bool((template_kwargs or {}).get("enable_thinking", False))
+    return bool((template_kwargs or {}).get("enable_thinking", True))
 
 
 def prompt_starts_in_thinking(prompt: str) -> bool:
@@ -906,12 +906,13 @@ def build_app(target: Path, draft: Path | None, bin_path: Path, budget: int, max
         ``template_kwargs`` is passed through to ``apply_chat_template`` so callers
         can toggle template knobs like ``enable_thinking`` per-request.
 
-        Thinking is disabled by default (enable_thinking=False) because Qwen3.6's
-        think mode wrecks DFlash acceptance rates. Clients can opt in by sending
-        ``"chat_template_kwargs": {"enable_thinking": true}`` in the request.
+        Thinking is enabled by default (enable_thinking=True) because Qwen3.6's
+        no-thinking template pre-fills a closed ``<think></think>`` block, which
+        can make the model emit EOS immediately. Clients can still opt out by
+        sending ``"chat_template_kwargs": {"enable_thinking": false}``.
         """
         tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True,
-                            "enable_thinking": False}
+                            "enable_thinking": True}
         tpl_kwargs.update(
             {k: v for k, v in (template_kwargs or {}).items() if k in _ALLOWED_TEMPLATE_KWARGS}
         )
@@ -1606,10 +1607,8 @@ def build_app(target: Path, draft: Path | None, bin_path: Path, budget: int, max
             i = first_stop_match(text, stops)
             if i != -1:
                 text = text[:i]
-        # Parse reasoning and tool calls. Match the prompt-rendering default
-        # (enable_thinking=False) so that spontaneous <think> tags from Qwen3.6
-        # are kept in content instead of stripped into an empty message when
-        # the model runs out of tokens before emitting </think>.
+        # Parse reasoning and tool calls using the same effective thinking
+        # setting that was used when rendering the prompt.
         thinking_enabled = _thinking_enabled(req.chat_template_kwargs)
         cleaned, tool_calls = parse_tool_calls(text, tools=req.tools)
         _remember_tool_call_text(text, tool_calls)

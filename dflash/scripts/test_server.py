@@ -12,6 +12,7 @@ from server import (
     build_app, MODEL_NAME,
     parse_tool_calls, parse_reasoning,
     normalize_stop, first_stop_match,
+    _thinking_enabled,
 )
 
 
@@ -104,6 +105,14 @@ class TestParseReasoning:
         cleaned, reasoning = parse_reasoning("</think>\n</think>\n8")
         assert cleaned == "8"
         assert reasoning is None
+
+
+class TestThinkingDefaults:
+    def test_thinking_enabled_defaults_on(self):
+        assert _thinking_enabled(None) is True
+        assert _thinking_enabled({}) is True
+        assert _thinking_enabled({"enable_thinking": True}) is True
+        assert _thinking_enabled({"enable_thinking": False}) is False
 
 
 # ─── parse_tool_calls ─────────────────────────────────────────────
@@ -487,6 +496,45 @@ def test_zero_token_prompt_is_rejected_before_daemon(
     assert data["error"]["param"] == "messages"
     assert "zero tokens" in data["error"]["message"]
     mock_os_read.assert_not_called()
+
+
+@patch("server.os.pipe")
+@patch("server.os.read")
+def test_chat_template_enables_thinking_by_default(
+        mock_os_read, mock_pipe, mock_tokenizer, app):
+    mock_pipe.return_value = (1, 2)
+    mock_os_read.side_effect = [struct.pack("<i", 10), struct.pack("<i", -1)]
+
+    client = TestClient(app)
+    response = client.post("/v1/chat/completions", json={
+        "model": MODEL_NAME,
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": False,
+    })
+
+    assert response.status_code == 200
+    kwargs = mock_tokenizer.apply_chat_template.call_args_list[-1][1]
+    assert kwargs["enable_thinking"] is True
+
+
+@patch("server.os.pipe")
+@patch("server.os.read")
+def test_chat_template_can_explicitly_disable_thinking(
+        mock_os_read, mock_pipe, mock_tokenizer, app):
+    mock_pipe.return_value = (1, 2)
+    mock_os_read.side_effect = [struct.pack("<i", 10), struct.pack("<i", -1)]
+
+    client = TestClient(app)
+    response = client.post("/v1/chat/completions", json={
+        "model": MODEL_NAME,
+        "messages": [{"role": "user", "content": "hi"}],
+        "chat_template_kwargs": {"enable_thinking": False},
+        "stream": False,
+    })
+
+    assert response.status_code == 200
+    kwargs = mock_tokenizer.apply_chat_template.call_args_list[-1][1]
+    assert kwargs["enable_thinking"] is False
 
 
 @patch("server.os.pipe")
