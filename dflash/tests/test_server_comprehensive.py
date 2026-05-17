@@ -912,6 +912,65 @@ class TestSuite:
         except Exception as e:
             self._check("DDTree CLI validation", False, str(e))
 
+    # ── PFlash CLI validation ────────────────────────────────────────────
+
+    def test_pflash_flags_accepted(self):
+        """Verify the server binary shows pflash flags in usage."""
+        print("\n[PF-1] PFlash — CLI flag validation")
+        try:
+            binary = os.path.join(os.path.dirname(__file__),
+                                  "..", "build", "dflash_server")
+            if not os.path.exists(binary):
+                self._skip("PFlash CLI validation", "binary not found")
+                return
+            proc = subprocess.run(
+                [binary],
+                capture_output=True, text=True, timeout=5
+            )
+            usage = proc.stderr + proc.stdout
+            self._check("usage shows --prefill-compression",
+                         "--prefill-compression" in usage,
+                         f"usage output: {usage[:300]}")
+            self._check("usage shows --prefill-threshold",
+                         "--prefill-threshold" in usage)
+            self._check("usage shows --prefill-drafter",
+                         "--prefill-drafter" in usage)
+            self._check("usage shows --prefill-skip-park",
+                         "--prefill-skip-park" in usage)
+            self._check("usage shows --prefill-keep-ratio",
+                         "--prefill-keep-ratio" in usage)
+        except subprocess.TimeoutExpired:
+            self._check("binary doesn't hang", False, "timed out")
+        except Exception as e:
+            self._check("PFlash CLI validation", False, str(e))
+
+    def test_pflash_requires_drafter(self):
+        """Server should fail with error when --prefill-compression enabled
+        but --prefill-drafter not provided."""
+        print("\n[PF-2] PFlash — requires --prefill-drafter")
+        try:
+            binary = os.path.join(os.path.dirname(__file__),
+                                  "..", "build", "dflash_server")
+            if not os.path.exists(binary):
+                self._skip("PFlash drafter check", "binary not found")
+                return
+            # Give a model path + pflash flags but NO --prefill-drafter
+            model = os.path.join(os.path.dirname(__file__),
+                                 "..", "models", "Qwen3-0.6B-BF16.gguf")
+            proc = subprocess.run(
+                [binary, model, "--prefill-compression", "auto",
+                 "--port", "19999"],
+                capture_output=True, text=True, timeout=10
+            )
+            output = proc.stderr + proc.stdout
+            self._check("server rejects missing drafter",
+                         proc.returncode != 0 and "prefill-drafter" in output.lower(),
+                         f"rc={proc.returncode} output: {output[:200]}")
+        except subprocess.TimeoutExpired:
+            self._check("server exits quickly on bad config", False, "timed out")
+        except Exception as e:
+            self._check("PFlash drafter check", False, str(e))
+
     # ── Streaming with client disconnect simulation ──────────────────────
 
     def test_streaming_partial_read(self):
@@ -1038,6 +1097,10 @@ class TestSuite:
 
         # DDTree
         self.test_ddtree_flags_accepted()
+
+        # PFlash
+        self.test_pflash_flags_accepted()
+        self.test_pflash_requires_drafter()
 
         # Disconnect
         self.test_streaming_partial_read()

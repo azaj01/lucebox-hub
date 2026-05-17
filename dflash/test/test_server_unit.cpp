@@ -13,6 +13,7 @@
 #include "server/prefix_cache.h"
 #include "server/utf8_utils.h"
 #include "server/api_types.h"
+#include "server/http_server.h"
 #include "server/third_party/nlohmann/json.hpp"
 
 #include <cstdio>
@@ -460,6 +461,78 @@ static void test_find_boundaries_empty() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// PFlash config tests (model-free)
+// ═══════════════════════════════════════════════════════════════════════
+
+static void test_pflash_config_defaults() {
+    ServerConfig cfg;
+    TEST_ASSERT(cfg.pflash_mode == ServerConfig::PflashMode::OFF);
+    TEST_ASSERT(cfg.pflash_threshold == 32000);
+    TEST_ASSERT(cfg.pflash_keep_ratio > 0.04f && cfg.pflash_keep_ratio < 0.06f);
+    TEST_ASSERT(cfg.pflash_drafter_path.empty());
+    TEST_ASSERT(!cfg.pflash_skip_park);
+}
+
+static void test_pflash_config_modes() {
+    ServerConfig cfg;
+    cfg.pflash_mode = ServerConfig::PflashMode::AUTO;
+    TEST_ASSERT(cfg.pflash_mode != ServerConfig::PflashMode::OFF);
+
+    cfg.pflash_mode = ServerConfig::PflashMode::ALWAYS;
+    TEST_ASSERT(cfg.pflash_mode != ServerConfig::PflashMode::OFF);
+    TEST_ASSERT(cfg.pflash_mode != ServerConfig::PflashMode::AUTO);
+}
+
+static void test_pflash_compress_request_struct() {
+    ModelBackend::CompressRequest req;
+    req.input_ids = {1, 2, 3, 4, 5};
+    req.keep_ratio = 0.05f;
+    req.drafter_path = "/path/to/drafter.gguf";
+    req.skip_park = true;
+
+    TEST_ASSERT(req.input_ids.size() == 5);
+    TEST_ASSERT(req.keep_ratio > 0.0f);
+    TEST_ASSERT(!req.drafter_path.empty());
+    TEST_ASSERT(req.skip_park);
+}
+
+static void test_pflash_compress_result_defaults() {
+    ModelBackend::CompressResult result;
+    TEST_ASSERT(!result.ok);
+    TEST_ASSERT(result.compressed_ids.empty());
+}
+
+static void test_pflash_threshold_auto_mode() {
+    // Simulate the threshold check logic from http_server.cpp
+    ServerConfig cfg;
+    cfg.pflash_mode = ServerConfig::PflashMode::AUTO;
+    cfg.pflash_threshold = 1000;
+
+    // Below threshold: don't compress
+    int n_prompt = 500;
+    bool should = (cfg.pflash_mode == ServerConfig::PflashMode::ALWAYS) ||
+                  (cfg.pflash_mode == ServerConfig::PflashMode::AUTO && n_prompt >= cfg.pflash_threshold);
+    TEST_ASSERT(!should);
+
+    // Above threshold: compress
+    n_prompt = 2000;
+    should = (cfg.pflash_mode == ServerConfig::PflashMode::ALWAYS) ||
+             (cfg.pflash_mode == ServerConfig::PflashMode::AUTO && n_prompt >= cfg.pflash_threshold);
+    TEST_ASSERT(should);
+}
+
+static void test_pflash_threshold_always_mode() {
+    ServerConfig cfg;
+    cfg.pflash_mode = ServerConfig::PflashMode::ALWAYS;
+
+    // Even small prompts should compress in ALWAYS mode
+    int n_prompt = 10;
+    bool should = (cfg.pflash_mode == ServerConfig::PflashMode::ALWAYS) ||
+                  (cfg.pflash_mode == ServerConfig::PflashMode::AUTO && n_prompt >= cfg.pflash_threshold);
+    TEST_ASSERT(should);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Main
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -511,6 +584,14 @@ int main() {
     RUN_TEST(test_hash_prefix_different_lengths);
     RUN_TEST(test_hash_prefix_empty);
     RUN_TEST(test_find_boundaries_empty);
+
+    std::fprintf(stderr, "\n── PFlash config ──\n");
+    RUN_TEST(test_pflash_config_defaults);
+    RUN_TEST(test_pflash_config_modes);
+    RUN_TEST(test_pflash_compress_request_struct);
+    RUN_TEST(test_pflash_compress_result_defaults);
+    RUN_TEST(test_pflash_threshold_auto_mode);
+    RUN_TEST(test_pflash_threshold_always_mode);
 
     std::fprintf(stderr, "\n══════════════════════════════════════════\n");
     std::fprintf(stderr, " Results: %d assertions, %d failures\n",
