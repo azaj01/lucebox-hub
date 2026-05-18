@@ -68,7 +68,7 @@ inline std::string utf8_sanitize(const std::string & s) {
             i += seq_len;
         } else {
             out += "\xEF\xBF\xBD";
-            i += seq_len;  // skip entire invalid sequence
+            i++;  // only skip lead byte; next byte may be a valid start
         }
     }
     return out;
