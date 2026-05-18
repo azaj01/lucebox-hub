@@ -526,11 +526,13 @@ std::vector<std::string> SseEmitter::emit_finish(int completion_tokens) {
             });
         }
 
-        // output_item.done
-        out.push_back(format_responses_event("response.output_item.done", {
-            {"output_index", 0},
-            {"item", final_output[0]}
-        }));
+        // output_item.done for each item
+        for (size_t i = 0; i < final_output.size(); i++) {
+            out.push_back(format_responses_event("response.output_item.done", {
+                {"output_index", (int)i},
+                {"item", final_output[i]}
+            }));
+        }
 
         // response.completed
         json shell = {

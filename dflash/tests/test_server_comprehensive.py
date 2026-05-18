@@ -154,7 +154,7 @@ class TestSuite:
             # Check server log for prefix cache activity.
             log = self._read_server_log()
             has_pc_log = "[pc]" in log
-            self._check("server logs prefix cache activity", has_pc_log or True,
+            self._check("server logs prefix cache activity", has_pc_log,
                          "no [pc] log lines found")
 
         except Exception as e:

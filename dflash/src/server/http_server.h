@@ -144,6 +144,11 @@ private:
     ServerJob *                     queue_tail_ = nullptr;
     std::atomic<bool>               stopping_{false};
 
+    // Active client thread tracking.
+    std::atomic<int>                active_clients_{0};
+    std::mutex                      clients_mu_;
+    std::condition_variable         clients_cv_;
+
     // Listen socket.
     int listen_fd_ = -1;
 };

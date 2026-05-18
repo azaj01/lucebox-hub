@@ -94,12 +94,18 @@ static bool is_letter(uint32_t cp) {
     // General: Other Letter (Lo) ranges for common scripts
     if (cp >= 0x1100 && cp <= 0x11FF) return true;  // Hangul Jamo
     if (cp >= 0x2E80 && cp <= 0x2EFF) return true;  // CJK Radicals
-    if (cp >= 0x3000 && cp <= 0x303F) return true;  // CJK Symbols
     return false;
 }
 
 static bool is_digit(uint32_t cp) {
-    return cp >= '0' && cp <= '9';
+    if (cp >= '0' && cp <= '9') return true;              // ASCII
+    if (cp >= 0xFF10 && cp <= 0xFF19) return true;        // Fullwidth digits
+    if (cp >= 0x0660 && cp <= 0x0669) return true;        // Arabic-Indic digits
+    if (cp >= 0x06F0 && cp <= 0x06F9) return true;        // Extended Arabic-Indic
+    if (cp >= 0x0966 && cp <= 0x096F) return true;        // Devanagari digits
+    if (cp >= 0x09E6 && cp <= 0x09EF) return true;        // Bengali digits
+    if (cp >= 0x0E50 && cp <= 0x0E59) return true;        // Thai digits
+    return false;
 }
 
 static bool is_mark(uint32_t cp) {
@@ -426,15 +432,42 @@ std::vector<int32_t> Tokenizer::bpe_encode_piece(const std::string & piece) cons
             ids.push_back(sit->second);
         } else {
             // Unknown symbol — emit byte-fallback tokens if available.
-            for (size_t i = 0; i < sym.size(); i++) {
+            // Symbols are in GPT-2 byte encoding; decode each Unicode codepoint
+            // back to the original byte before emitting <0xNN>.
+            static const auto gpt2_rev = []() {
+                // Build reverse table: codepoint → original byte.
+                std::array<uint8_t, 324> t{};  // covers U+0000..U+0143
+                int n = 0;
+                for (int b = 0; b < 256; b++) {
+                    if ((b >= 33 && b <= 126) || (b >= 161 && b <= 172) || (b >= 174 && b <= 255)) {
+                        t[b] = (uint8_t)b;
+                    } else {
+                        t[256 + n] = (uint8_t)b;
+                        n++;
+                    }
+                }
+                return t;
+            }();
+            const char * p = sym.c_str();
+            const char * end = p + sym.size();
+            while (p < end) {
+                int cplen;
+                uint32_t cp = utf8_decode(p, (size_t)(end - p), &cplen);
+                uint8_t orig_byte;
+                if ((cp >= 33 && cp <= 126) || (cp >= 161 && cp <= 172) || (cp >= 174 && cp <= 255)) {
+                    orig_byte = (uint8_t)cp;
+                } else if (cp >= 256 && cp < 256 + 68) {
+                    orig_byte = gpt2_rev[cp];
+                } else {
+                    orig_byte = '?';
+                }
                 char buf[8];
-                std::snprintf(buf, sizeof(buf), "<0x%02X>",
-                              (unsigned)(uint8_t)sym[i]);
+                std::snprintf(buf, sizeof(buf), "<0x%02X>", (unsigned)orig_byte);
                 auto bit = token_to_id_.find(buf);
                 if (bit != token_to_id_.end()) {
                     ids.push_back(bit->second);
                 }
-                // else: truly unknown byte — skip (shouldn't happen)
+                p += cplen;
             }
         }
     }

@@ -95,8 +95,11 @@ int main(int argc, char ** argv) {
                 sconfig.pflash_mode = ServerConfig::PflashMode::AUTO;
             else if (std::strcmp(mode, "always") == 0)
                 sconfig.pflash_mode = ServerConfig::PflashMode::ALWAYS;
-            else
-                sconfig.pflash_mode = ServerConfig::PflashMode::OFF;
+            else {
+                std::fprintf(stderr, "[server] unknown --prefill-compression mode: '%s' (expected: auto, always, off)\n", mode);
+                print_usage(argv[0]);
+                return 1;
+            }
         } else if (std::strcmp(argv[i], "--prefill-threshold") == 0 && i + 1 < argc) {
             sconfig.pflash_threshold = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--prefill-keep-ratio") == 0 && i + 1 < argc) {

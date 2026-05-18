@@ -31,8 +31,7 @@ void ToolMemory::remember(const std::vector<std::string> & call_ids,
     auto block_it = blocks_.find(raw_text);
     if (block_it == blocks_.end()) {
         Block block;
-        block.raw_text = raw_text;
-        block.size_bytes = raw_text.size();
+        block.size_bytes = raw_text.size();  // accounts for the map key
         block.refs = 0;
         block_it = blocks_.emplace(raw_text, std::move(block)).first;
         total_bytes_ += block_it->second.size_bytes;
@@ -50,6 +49,7 @@ void ToolMemory::remember(const std::vector<std::string> & call_ids,
             drop_entry(call_id);
         }
         by_id_[call_id] = raw_text;
+        total_bytes_ += raw_text.size();  // account for by_id_ value copy
         block_it->second.refs++;
         touch(call_id);
     }
@@ -92,12 +92,15 @@ void ToolMemory::drop_entry(const std::string & call_id) {
     if (id_it == by_id_.end()) return;
 
     const std::string & text_key = id_it->second;
+    size_t id_value_bytes = text_key.size();  // by_id_ value copy size
+
     auto block_it = blocks_.find(text_key);
     if (block_it != blocks_.end()) {
         if (block_it->second.refs > 0) {
             block_it->second.refs--;
         }
         if (block_it->second.refs == 0) {
+            // Subtract the block key size
             if (block_it->second.size_bytes > total_bytes_) {
                 total_bytes_ = 0;
             } else {
@@ -105,6 +108,13 @@ void ToolMemory::drop_entry(const std::string & call_id) {
             }
             blocks_.erase(block_it);
         }
+    }
+
+    // Subtract the by_id_ value copy size
+    if (id_value_bytes > total_bytes_) {
+        total_bytes_ = 0;
+    } else {
+        total_bytes_ -= id_value_bytes;
     }
 
     by_id_.erase(id_it);

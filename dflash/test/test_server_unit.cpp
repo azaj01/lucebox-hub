@@ -349,10 +349,10 @@ static void test_emitter_anthropic_structure() {
     TEST_ASSERT(start_str.find("content_block_start") != std::string::npos);
 
     auto chunks = em.emit_token("Hello");
-    std::string chunk_str = concat(chunks);
-    // Should have content_block_delta
-    TEST_ASSERT(chunk_str.find("content_block_delta") != std::string::npos ||
-                chunk_str.empty());  // may be held back
+    auto chunks2 = em.emit_token(" world! This is enough text to flush the holdback buffer.");
+    std::string chunk_str = concat(chunks) + concat(chunks2);
+    // At least one emission should contain content_block_delta
+    TEST_ASSERT(chunk_str.find("content_block_delta") != std::string::npos);
 
     // Feed enough to flush holdback
     em.emit_token(" world! This is a longer sentence to exceed holdback.");

@@ -42,11 +42,33 @@ inline std::string utf8_sanitize(const std::string & s) {
             if (((uint8_t)s[i + j] & 0xC0) != 0x80) { valid = false; break; }
         }
         if (valid) {
+            // Decode codepoint and validate range.
+            uint32_t cp = 0;
+            if (seq_len == 1) {
+                cp = c;
+            } else if (seq_len == 2) {
+                cp = ((uint32_t)(c & 0x1F) << 6) | ((uint32_t)((uint8_t)s[i+1]) & 0x3F);
+                if (cp < 0x80) valid = false;  // overlong
+            } else if (seq_len == 3) {
+                cp = ((uint32_t)(c & 0x0F) << 12) |
+                     ((uint32_t)((uint8_t)s[i+1] & 0x3F) << 6) |
+                     ((uint32_t)((uint8_t)s[i+2]) & 0x3F);
+                if (cp < 0x800) valid = false;  // overlong
+                if (cp >= 0xD800 && cp <= 0xDFFF) valid = false;  // surrogate
+            } else {
+                cp = ((uint32_t)(c & 0x07) << 18) |
+                     ((uint32_t)((uint8_t)s[i+1] & 0x3F) << 12) |
+                     ((uint32_t)((uint8_t)s[i+2] & 0x3F) << 6) |
+                     ((uint32_t)((uint8_t)s[i+3]) & 0x3F);
+                if (cp < 0x10000 || cp > 0x10FFFF) valid = false;  // overlong or out-of-range
+            }
+        }
+        if (valid) {
             out.append(s, i, seq_len);
             i += seq_len;
         } else {
             out += "\xEF\xBF\xBD";
-            i++;
+            i += seq_len;  // skip entire invalid sequence
         }
     }
     return out;

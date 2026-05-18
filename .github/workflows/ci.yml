@@ -60,7 +60,7 @@ jobs:
       - name: Run C++ server unit tests
         run: |
           cd dflash/build
-          ctest --output-on-failure -R server_unit
+          ctest --output-on-failure -R server_unit --no-tests=error
 
       - name: Run Python server unit tests
         run: |

@@ -395,59 +395,43 @@ ToolParseResult parse_tool_calls(const std::string & text, const json & tools) {
                 cursor = start + 1;
                 continue;
             }
-            try {
-                json obj = json::parse(text.begin() + start, text.end(),
-                                       nullptr, false);  // no exceptions
-                if (obj.is_discarded()) {
-                    cursor = start + 1;
+            // Find balanced braces first to extract exact JSON boundaries.
+            int depth = 0;
+            size_t end_pos = start;
+            bool in_string = false;
+            for (size_t i = start; i < text.size(); i++) {
+                char c = text[i];
+                if (in_string) {
+                    if (c == '\\') { i++; continue; }
+                    if (c == '"') in_string = false;
                     continue;
                 }
-                // Re-parse to get consumed length
-                std::string sub = text.substr(start);
-                auto parsed = json::parse(sub.begin(), sub.end(),
-                                          nullptr, true, true);
-                // Estimate consumed length by serializing and using that
-                // Actually, nlohmann doesn't expose consumed bytes easily.
-                // Use a different approach: scan for balanced braces.
-                int depth = 0;
-                size_t end_pos = start;
-                bool in_string = false;
-                for (size_t i = start; i < text.size(); i++) {
-                    char c = text[i];
-                    if (in_string) {
-                        if (c == '\\') { i++; continue; }
-                        if (c == '"') in_string = false;
-                        continue;
-                    }
-                    if (c == '"') { in_string = true; continue; }
-                    if (c == '{') depth++;
-                    else if (c == '}') {
-                        depth--;
-                        if (depth == 0) { end_pos = i + 1; break; }
-                    }
+                if (c == '"') { in_string = true; continue; }
+                if (c == '{') depth++;
+                else if (c == '}') {
+                    depth--;
+                    if (depth == 0) { end_pos = i + 1; break; }
                 }
-                if (end_pos <= start) {
-                    cursor = start + 1;
-                    continue;
-                }
-
-                // Re-parse the exact substring
-                std::string json_str = text.substr(start, end_pos - start);
-                json obj2 = json::parse(json_str, nullptr, false);
-                if (obj2.is_discarded()) {
-                    cursor = start + 1;
-                    continue;
-                }
-
-                std::string name;
-                json args;
-                if (parse_json_tool_call(obj2, name, args)) {
-                    add_call(name, args, start, end_pos);
-                }
-                cursor = end_pos;
-            } catch (...) {
-                cursor = start + 1;
             }
+            if (end_pos <= start) {
+                cursor = start + 1;
+                continue;
+            }
+
+            // Parse the exact brace-balanced substring.
+            std::string json_str = text.substr(start, end_pos - start);
+            json obj2 = json::parse(json_str, nullptr, false);
+            if (obj2.is_discarded()) {
+                cursor = start + 1;
+                continue;
+            }
+
+            std::string name;
+            json args;
+            if (parse_json_tool_call(obj2, name, args)) {
+                add_call(name, args, start, end_pos);
+            }
+            cursor = end_pos;
         }
     }
 

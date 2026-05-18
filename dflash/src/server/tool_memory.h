@@ -33,7 +33,6 @@ public:
 
 private:
     struct Block {
-        std::string raw_text;
         size_t      size_bytes;
         size_t      refs = 0;
     };

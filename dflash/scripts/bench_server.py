@@ -147,6 +147,7 @@ def workload_he(url: str, n_sample: int, n_gen: int, **_kw):
 def _load_gsm8k(n_sample: int):
     from datasets import load_dataset
     ds = load_dataset("gsm8k", "main", split="test")
+    n_sample = min(n_sample, len(ds))
     ds = ds.shuffle(seed=42).select(range(n_sample))
     return [
         {"name": f"gsm8k_{i:02d}",
@@ -174,6 +175,7 @@ def workload_gsm8k(url: str, n_sample: int, n_gen: int, **_kw):
 def _load_math500(n_sample: int):
     from datasets import load_dataset
     ds = load_dataset("HuggingFaceH4/MATH-500", split="test")
+    n_sample = min(n_sample, len(ds))
     ds = ds.shuffle(seed=42).select(range(n_sample))
     return [
         {"name": f"math_{i:02d}",

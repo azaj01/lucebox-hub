@@ -194,14 +194,9 @@ int Qwen35Backend::snapshot_cur_pos(int slot) const {
 // ── Compress (pflash) ───────────────────────────────────────────────────
 
 bool Qwen35Backend::handle_compress(const std::string & line, const DaemonIO & io) {
-    // Check for "nopark" as the last space-delimited token (not substring)
-    // to avoid false matches against file paths containing that text.
-    bool skip_park = false;
-    {
-        auto pos = line.rfind(' ');
-        if (pos != std::string::npos && line.substr(pos + 1) == "nopark")
-            skip_park = true;
-    }
+    // Check for "nopark" suffix (must be a separate token, not part of a path)
+    bool skip_park = (line.size() >= 16 &&
+                      line.compare(line.size() - 7, 7, " nopark") == 0);
 
     // Parse: "compress <path> <keep_x1000> <drafter_gguf> [nopark]"
     char ppath[1024];

@@ -60,6 +60,19 @@ void HttpServer::shutdown() {
     if (worker_thread_.joinable()) {
         worker_thread_.join();
     }
+    // Drain any remaining queued jobs so client threads don't wait forever.
+    {
+        std::lock_guard<std::mutex> lk(queue_mu_);
+        while (queue_head_) {
+            ServerJob * j = queue_head_;
+            queue_head_ = j->next;
+            j->next = nullptr;
+            std::lock_guard<std::mutex> jlk(j->mu);
+            j->done = true;
+            j->cv.notify_one();
+        }
+        queue_tail_ = nullptr;
+    }
 }
 
 int HttpServer::run() {
@@ -124,9 +137,20 @@ int HttpServer::run() {
         setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
         // Spawn client thread (detached — client_main owns the fd).
+        active_clients_.fetch_add(1);
         std::thread([this, client_fd]() {
             handle_client(client_fd);
+            if (active_clients_.fetch_sub(1) == 1) {
+                std::lock_guard<std::mutex> lk(clients_mu_);
+                clients_cv_.notify_all();
+            }
         }).detach();
+    }
+
+    // Wait for all client threads to finish.
+    {
+        std::unique_lock<std::mutex> lk(clients_mu_);
+        clients_cv_.wait(lk, [this]() { return active_clients_.load() == 0; });
     }
 
     // Wait for worker to finish.
@@ -724,6 +748,13 @@ void HttpServer::worker_loop() {
 
 void HttpServer::enqueue(ServerJob * job) {
     std::lock_guard<std::mutex> lk(queue_mu_);
+    if (stopping_.load()) {
+        // Server is shutting down — immediately signal job as done.
+        std::lock_guard<std::mutex> jlk(job->mu);
+        job->done = true;
+        job->cv.notify_one();
+        return;
+    }
     job->next = nullptr;
     if (queue_tail_) queue_tail_->next = job;
     else queue_head_ = job;

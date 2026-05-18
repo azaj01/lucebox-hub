@@ -364,11 +364,13 @@ std::pair<int, int> PrefixCache::lookup_full(const std::vector<int32_t> & prompt
     e.hits++;
     e.last_used_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
+    int slot = e.slot;
+    int cur_ids_len = e.cur_ids_len;
     move_full_to_end(idx);
 
     std::fprintf(stderr, "[pc] full-cache hit slot=%d cur_ids_len=%d\n",
-                 e.slot, e.cur_ids_len);
-    return {e.slot, e.cur_ids_len};
+                 slot, cur_ids_len);
+    return {slot, cur_ids_len};
 }
 
 int PrefixCache::prepare_full_snap(const std::vector<int32_t> & prompt_ids) {

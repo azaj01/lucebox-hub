@@ -942,8 +942,9 @@ bool Qwen3Backend::handle_compress(const std::string & line, const DaemonIO & io
         return false;
     }
 
-    // Check for "nopark" suffix
-    bool skip_park = (line.find("nopark") != std::string::npos);
+    // Check for "nopark" suffix (must be a separate token, not part of a path)
+    bool skip_park = (line.size() >= 16 &&
+                      line.compare(line.size() - 7, 7, " nopark") == 0);
 
     auto src_ids = read_int32_file(ppath);
     if (src_ids.empty()) {
