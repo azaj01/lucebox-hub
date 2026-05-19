@@ -48,6 +48,11 @@ static void print_usage(const char * prog) {
         "  --prefill-keep-ratio <F>    Fraction of tokens to keep (default: 0.05)\n"
         "  --prefill-drafter <path>    Drafter GGUF for compression (Qwen3-0.6B)\n"
         "  --prefill-skip-park         Skip park/unpark (for >=32GB GPUs)\n"
+        "\n"
+        "Disk KV cache:\n"
+        "  --kv-cache-dir <path>       Directory for ondisk KV cache (enables feature)\n"
+        "  --kv-cache-budget <MB>      Max disk usage in MB (default: 4096)\n"
+        "  --kv-cache-min-tokens <N>   Min tokens to persist (default: 512)\n"
         "\n", prog);
 }
 
@@ -111,6 +116,12 @@ int main(int argc, char ** argv) {
             sconfig.pflash_drafter_path = argv[++i];
         } else if (std::strcmp(argv[i], "--prefill-skip-park") == 0) {
             sconfig.pflash_skip_park = true;
+        } else if (std::strcmp(argv[i], "--kv-cache-dir") == 0 && i + 1 < argc) {
+            sconfig.disk_cache_dir = argv[++i];
+        } else if (std::strcmp(argv[i], "--kv-cache-budget") == 0 && i + 1 < argc) {
+            sconfig.disk_cache_budget_mb = (size_t)std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--kv-cache-min-tokens") == 0 && i + 1 < argc) {
+            sconfig.disk_cache_min_tokens = std::atoi(argv[++i]);
         } else {
             std::fprintf(stderr, "[server] unknown option: %s\n", argv[i]);
             print_usage(argv[0]);

@@ -43,7 +43,11 @@ HttpServer::HttpServer(ModelBackend & backend,
     , config_(config)
     , chat_format_(ChatFormat::QWEN3)  // default, overridden by arch
     , prefix_cache_(config.prefix_cache_cap, tokenizer)
+    , disk_cache_({config.disk_cache_dir,
+                   config.disk_cache_budget_mb * (size_t)(1024 * 1024),
+                   config.disk_cache_min_tokens}, backend)
 {
+    disk_cache_.init();
 }
 
 HttpServer::~HttpServer() {
@@ -577,6 +581,23 @@ void HttpServer::worker_loop() {
             }
         }
 
+        // Disk prefix cache: try disk if memory missed.
+        // Staging slot is the last ModelBackend slot, reserved for disk loads.
+        // PrefixCache inline uses 0..cap-1 and full uses cap..cap+full_cap-1,
+        // so slot 63 is safe as long as total cache slots < 63.
+        static constexpr int DISK_STAGING_SLOT = ModelBackend::kMaxSlots - 1;
+        bool disk_hit = false;
+        if (!using_restore && !disk_cache_.disabled()) {
+            if (disk_cache_.lookup(effective_prompt, DISK_STAGING_SLOT)) {
+                cache_slot = DISK_STAGING_SLOT;
+                prefix_len = backend_.snapshot_cur_pos(DISK_STAGING_SLOT);
+                using_restore = true;
+                disk_hit = true;
+                std::fprintf(stderr, "[disk-cache] hit, loaded to slot=%d pos=%d\n",
+                             DISK_STAGING_SLOT, prefix_len);
+            }
+        }
+
         // Prepare inline snapshot for future cache hits.
         auto [snap_slot, snap_cut] = prefix_cache_.prepare_inline_snap(effective_prompt);
         bool snap_prepared = (snap_slot >= 0);
@@ -630,9 +651,19 @@ void HttpServer::worker_loop() {
         if (snap_prepared) {
             if (completion_tokens > 0 && !client_disconnected) {
                 prefix_cache_.confirm_inline_snap(snap_slot, snap_cut, effective_prompt);
+                // Save to disk cache if threshold met.
+                if (!disk_cache_.disabled()) {
+                    disk_cache_.learn_layout(snap_slot);
+                    disk_cache_.save(snap_slot, effective_prompt);
+                }
             } else {
                 prefix_cache_.abort_inline_snap(snap_slot);
             }
+        }
+
+        // Free the disk staging slot after use.
+        if (disk_hit) {
+            backend_.snapshot_free(DISK_STAGING_SLOT);
         }
 
         // Full-compress cache: reserve + confirm after successful generation.

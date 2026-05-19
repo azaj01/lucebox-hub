@@ -16,6 +16,7 @@
 #include "chat_template.h"
 #include "tool_memory.h"
 #include "prefix_cache.h"
+#include "disk_prefix_cache.h"
 #include "api_types.h"
 #include <nlohmann/json.hpp>
 
@@ -53,6 +54,11 @@ struct ServerConfig {
     float       pflash_keep_ratio = 0.05f;  // fraction of tokens to keep
     std::string pflash_drafter_path;        // path to drafter GGUF (Qwen3-0.6B)
     bool        pflash_skip_park = false;   // skip park/unpark for ≥32GB GPUs
+
+    // Disk prefix cache
+    std::string disk_cache_dir;             // empty = disabled
+    size_t      disk_cache_budget_mb = 4096; // max disk usage in MB
+    int         disk_cache_min_tokens = 512; // only persist >= this many tokens
 };
 
 // ─── Parsed request ─────────────────────────────────────────────────────
@@ -135,6 +141,7 @@ private:
     ChatFormat       chat_format_;
     ToolMemory       tool_memory_;
     PrefixCache      prefix_cache_;
+    DiskPrefixCache  disk_cache_;
 
     // Worker thread.
     std::thread                     worker_thread_;
