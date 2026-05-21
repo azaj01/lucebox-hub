@@ -16,7 +16,7 @@
 #include <memory>
 #include <string>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ─── Backend creation arguments ─────────────────────────────────────────
 // A superset of all per-arch config fields. The factory reads only those
@@ -62,4 +62,4 @@ std::unique_ptr<ModelBackend> create_backend(const BackendArgs & args);
 // Useful for early dispatch (e.g. printing which backend will be used).
 std::string detect_arch(const char * model_path);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

@@ -17,7 +17,7 @@
 #include <cstdio>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── Per-GPU shard for layer-split target ────────────────────────────
 
@@ -41,4 +41,4 @@ inline TargetLayerSplitShard * find_target_shard(
     return nullptr;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

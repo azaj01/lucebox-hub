@@ -7,7 +7,7 @@
 
 #include <string>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct GgufModelInfo {
     std::string arch;       // e.g. "qwen35", "laguna", "qwen3", "gemma4"
@@ -18,4 +18,4 @@ struct GgufModelInfo {
 // Returns info with arch="" and n_layer=-1 on failure.
 GgufModelInfo inspect_gguf_model_info(const char * path);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

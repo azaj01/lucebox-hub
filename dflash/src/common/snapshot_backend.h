@@ -17,7 +17,7 @@
 
 #include <cstdio>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // Select or create a backend for prefix cache snapshot storage.
 //
@@ -53,4 +53,4 @@ inline void free_snapshot_backend(ggml_backend_t snap_backend,
     }
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

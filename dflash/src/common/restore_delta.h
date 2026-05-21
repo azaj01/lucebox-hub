@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 inline std::vector<int32_t> restore_prompt_delta(const std::vector<int32_t> & prompt,
                                                  int cached_prefix_len) {
@@ -19,4 +19,4 @@ inline std::vector<int32_t> restore_prompt_delta(const std::vector<int32_t> & pr
         prompt.end());
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

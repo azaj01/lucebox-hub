@@ -4,7 +4,7 @@
 #include <cmath>
 #include <set>
 
-namespace dflash27b {
+namespace dflash::common {
 
 std::vector<std::pair<int,int>> compute_layer_ranges(
     int n_layer,
@@ -86,4 +86,4 @@ std::string validate_device_placement(
     return {};  // ok
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

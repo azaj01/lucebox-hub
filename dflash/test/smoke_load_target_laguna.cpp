@@ -15,7 +15,7 @@
 #include "ggml-backend.h"
 #include "ggml-cuda.h"
 
-using namespace dflash27b;
+using namespace dflash::common;
 
 int main(int argc, char ** argv) {
     if (argc < 2) {

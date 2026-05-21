@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct LagunaBackendArgs {
     std::string target_path;
@@ -78,4 +78,4 @@ private:
     bool ensure_slot(int slot);
 };
 
-}  // namespace dflash27b
+}  // namespace dflash::common

@@ -10,7 +10,7 @@
 
 #include <cstdio>
 
-namespace dflash27b {
+namespace dflash::common {
 
 std::string detect_arch(const char * model_path) {
     auto info = inspect_gguf_model_info(model_path);
@@ -107,4 +107,4 @@ std::unique_ptr<ModelBackend> create_backend(const BackendArgs & args) {
     }
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

@@ -1,4 +1,4 @@
-// HTTP server infrastructure for dflash27b native server.
+// HTTP server infrastructure for dflash::common native server.
 //
 // Ported from ds4_server.c's socket/threading/HTTP layer, converted to C++.
 // Architecture:
@@ -32,7 +32,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 using json = nlohmann::json;
 
@@ -186,4 +186,4 @@ struct ServerJob {
     ServerJob *   next = nullptr;
 };
 
-}  // namespace dflash27b
+}  // namespace dflash::common

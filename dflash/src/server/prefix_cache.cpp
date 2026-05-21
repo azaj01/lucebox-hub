@@ -7,7 +7,7 @@
 #include <cstring>
 #include <chrono>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ─── Chat marker resolution ────────────────────────────────────────────
 
@@ -424,4 +424,4 @@ void PrefixCache::abort_full_snap(int /*slot*/) {
     full_has_pending_evict_ = false;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

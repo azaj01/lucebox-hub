@@ -20,7 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 
-namespace dflash27b {
+namespace dflash::common {
 
 #define IS_EOS_TOK(tok, w)                                         \
     ( ((w).eos_chat_id >= 0 && (tok) == (w).eos_chat_id)                  \
@@ -370,7 +370,7 @@ bool Qwen35Backend::handle_compress(const std::string & line, const DaemonIO & i
 void Qwen35Backend::free_drafter() {
     if (drafter_loaded_) {
         // Drafter has its own backend — do a full free (weights + backend)
-        dflash27b::free_drafter(drafter_ctx_);
+        dflash::common::free_drafter(drafter_ctx_);
         drafter_loaded_ = false;
         std::printf("[drafter] freed\n"); std::fflush(stdout);
     }
@@ -975,4 +975,4 @@ int Qwen35Backend::verify_tree(int committed, const DDTree & tree) {
     return 0;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

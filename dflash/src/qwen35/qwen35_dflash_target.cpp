@@ -5,7 +5,7 @@
 #include "step_graph.h"
 #include "attn_masks.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 Qwen35DFlashTarget::~Qwen35DFlashTarget() {
     step_graph_destroy(proj_sg_);
@@ -149,4 +149,4 @@ const std::vector<int> & Qwen35DFlashTarget::capture_layer_ids() const {
     return capture_ids_;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

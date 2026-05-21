@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <cstdlib>          // size_t
 
-namespace dflash27b {
+namespace dflash::common {
 namespace flashprefill {
 
 // Defined in flashprefill_kernels.hip.cu.
@@ -108,4 +108,4 @@ extern "C" int launch_bsa_sparse_flash_forward_bf16(
 }
 
 }  // namespace flashprefill
-}  // namespace dflash27b
+}  // namespace dflash::common

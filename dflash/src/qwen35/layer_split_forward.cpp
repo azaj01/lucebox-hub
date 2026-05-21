@@ -15,7 +15,7 @@
 #include <cstdio>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 bool compute_target_split_argmax(
         StepGraph & sg,
@@ -233,4 +233,4 @@ void free_target_layer_split_shards(std::vector<TargetLayerSplitShard> & shards)
     shards.clear();
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

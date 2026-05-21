@@ -8,7 +8,7 @@
 #include <unordered_set>
 #include <utility>
 
-namespace dflash27b {
+namespace dflash::common {
 
 int sample_logits(const float * logits_in,
                   int vocab,
@@ -95,4 +95,4 @@ bool parse_sampler_token(std::string & line, SamplerCfg & out) {
     return true;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 using json = nlohmann::json;
 
@@ -108,4 +108,4 @@ private:
     static constexpr size_t HOLDBACK = 12;  // max(len("<tool_call>"), len("</think>"), len("<think>"))
 };
 
-}  // namespace dflash27b
+}  // namespace dflash::common

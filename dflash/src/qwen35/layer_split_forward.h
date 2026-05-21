@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // Compute argmax(logits) for a slice of the activation tensor via
 // out_norm + lm_head projection.
@@ -52,4 +52,4 @@ bool run_target_layer_split_forward(
 // Free all shards (weights, cache, backend).
 void free_target_layer_split_shards(std::vector<TargetLayerSplitShard> & shards);
 
-} // namespace dflash27b
+} // namespace dflash::common

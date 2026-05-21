@@ -20,7 +20,7 @@
 #include <string>
 
 using json = nlohmann::json;
-using namespace dflash27b;
+using namespace dflash::common;
 
 int main(int argc, char ** argv) {
     if (argc < 2) {

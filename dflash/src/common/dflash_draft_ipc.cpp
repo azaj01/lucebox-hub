@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── DFlashDraftIpcClient ────────────────────────────────────────────
 
@@ -248,4 +248,4 @@ bool copy_capture_slice_to_remote_draft(
     return remote.send_feature_slice(capture_idx, start_pos, n_tokens, host);
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

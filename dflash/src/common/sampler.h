@@ -1,6 +1,6 @@
 // Shared CPU sampler chain used by both target arches.
 //
-// dflash27b daemon protocol embeds optional sampler params as a tail on each
+// dflash::common daemon protocol embeds optional sampler params as a tail on each
 // generate command: ` samp=temp,top_p,top_k,rep_pen,seed`. parse_sampler_token
 // strips the tail in place and fills a SamplerCfg; sample_logits applies the
 // chain rep_penalty -> top_k -> softmax(temp) -> top_p -> draw.
@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct SamplerCfg {
     float    temp       = 0.0f;
@@ -39,4 +39,4 @@ int sample_logits(const float * logits_in,
 // top_k=0, rep_pen=1, seed=0).
 bool parse_sampler_token(std::string & line, SamplerCfg & out);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

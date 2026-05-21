@@ -132,7 +132,7 @@ MODEL_NAME = "luce-dflash"
 # Architecture strings stored in `general.architecture` of every GGUF this
 # server can drive. test_dflash dispatches by GGUF arch internally:
 #   qwen35 / qwen36  -> existing DFlash + DDTree pipeline
-#   laguna           -> dflash27b::run_laguna_daemon() (no spec-decode)
+#   laguna           -> dflash::common::run_laguna_daemon() (no spec-decode)
 # server.py just needs to omit --draft + the DFlash/DDTree flags when the
 # arch doesn't support speculative decoding yet.
 _QWEN35_ARCHES = {"qwen35", "qwen36"}
@@ -843,7 +843,7 @@ def build_app(target: Path, draft: Path | None, bin_path: Path, budget: int, max
 
     if arch in _LAGUNA_ARCHES:
         # test_dflash detects arch=laguna from the GGUF and dispatches
-        # internally to dflash27b::run_laguna_daemon(). No --draft, no
+        # internally to dflash::common::run_laguna_daemon(). No --draft, no
         # --fast-rollback, no --ddtree (no Laguna spec-decode draft yet).
         # Tokens stream as int32 LE on stream_fd terminated by -1, byte-
         # identical to the qwen35 path so SSE/stream consumers stay shared.

@@ -15,7 +15,7 @@
 #include <vector>
 #include <utility>
 
-namespace dflash27b {
+namespace dflash::common {
 
 using json = nlohmann::json;
 
@@ -35,4 +35,4 @@ struct ToolParseResult {
 ToolParseResult parse_tool_calls(const std::string & text,
                                  const json & tools = json());
 
-}  // namespace dflash27b
+}  // namespace dflash::common

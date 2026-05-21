@@ -11,7 +11,7 @@
 
 #include "model_backend.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct DaemonLoopArgs {
     int stream_fd = -1;
@@ -23,4 +23,4 @@ struct DaemonLoopArgs {
 // commands until `quit`, `exit`, or EOF.  Returns 0 on clean shutdown.
 int run_daemon(ModelBackend & backend, const DaemonLoopArgs & args);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

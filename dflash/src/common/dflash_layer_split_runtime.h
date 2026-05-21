@@ -13,7 +13,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── Runtime configuration (replaces globals) ────────────────────────
 
@@ -74,4 +74,4 @@ inline bool activation_pair_init(ActivationPair & p,
     return true;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

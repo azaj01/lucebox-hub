@@ -17,7 +17,7 @@
 #include <cstdio>
 #include <cmath>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── Ctor / dtor ────────────────────────────────────────────────────────
 
@@ -370,4 +370,4 @@ void Gemma4Backend::shutdown() {
     std::printf("[gemma4] shutdown\n"); std::fflush(stdout);
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

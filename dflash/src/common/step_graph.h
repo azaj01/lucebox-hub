@@ -14,7 +14,7 @@
 
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct StepGraph {
     ggml_context *  ctx = nullptr;
@@ -66,4 +66,4 @@ inline void step_graph_destroy(StepGraph & sg) {
     step_graph_free(sg);
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

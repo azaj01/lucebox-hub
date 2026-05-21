@@ -6,7 +6,7 @@
 
 #include <cstdio>
 
-namespace dflash27b {
+namespace dflash::common {
 
 int run_qwen3_daemon(const Qwen3DaemonArgs & args) {
     Qwen3BackendConfig cfg;
@@ -26,4 +26,4 @@ int run_qwen3_daemon(const Qwen3DaemonArgs & args) {
     return run_daemon(backend, dargs);
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

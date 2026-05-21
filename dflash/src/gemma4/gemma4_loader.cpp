@@ -27,7 +27,7 @@
 #include <unistd.h>
 #endif
 
-namespace dflash27b {
+namespace dflash::common {
 
 namespace {
 
@@ -367,4 +367,4 @@ void free_gemma4_snapshot(Gemma4Snapshot & s) {
     s.cur_pos = 0;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

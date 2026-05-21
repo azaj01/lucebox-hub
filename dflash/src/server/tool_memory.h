@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 class ToolMemory {
 public:
@@ -55,4 +55,4 @@ private:
     std::unordered_map<std::string, std::list<std::string>::iterator> lru_map_;
 };
 
-}  // namespace dflash27b
+}  // namespace dflash::common

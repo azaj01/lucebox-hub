@@ -61,7 +61,7 @@
 #include <unistd.h>
 #endif
 
-namespace dflash27b {
+namespace dflash::common {
 
 // CpuEmbedder destructor + embed() method
 CpuEmbedder::~CpuEmbedder() {
@@ -683,4 +683,4 @@ void free_target_weights(TargetWeights & w) {
     w.output   = nullptr;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

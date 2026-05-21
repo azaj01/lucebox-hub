@@ -24,7 +24,7 @@
 #include "ggml-backend.h"
 #include "ggml-cuda.h"
 
-using namespace dflash27b;
+using namespace dflash::common;
 
 // Forward step lives in src/laguna_target_graph.cpp::laguna_step(). The
 // bench just times prefill + decode loops on top of it.

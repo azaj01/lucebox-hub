@@ -3,7 +3,7 @@
 
 #include <cstdio>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── global state ────────────────────────────────────────────────
 bool g_peer_access_opt_in = false;
@@ -100,4 +100,4 @@ bool copy_peer_async(void * dst, int dst_device,
 #endif
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

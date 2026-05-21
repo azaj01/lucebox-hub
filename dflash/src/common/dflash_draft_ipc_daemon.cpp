@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 int run_dflash_draft_ipc_daemon(const char * draft_path,
                                 int ring_cap,
@@ -208,4 +208,4 @@ int run_dflash_draft_ipc_daemon(const char * draft_path,
 #endif
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

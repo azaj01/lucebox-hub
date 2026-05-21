@@ -16,7 +16,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ─── Inline SHA-1 (same as prefix_cache.cpp) ────────────────────────────
 
@@ -729,4 +729,4 @@ bool DiskPrefixCache::read_header(FILE * f, DiskCacheHeader & hdr) {
     return true;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

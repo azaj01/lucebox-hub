@@ -24,7 +24,7 @@
 #include "qwen3_drafter.h"
 #include "gpu_runtime_compat.h"
 #include "laguna_daemon.h"  // arch dispatch - laguna targets are served by
-                            // dflash27b::run_laguna_daemon() instead of the
+                            // dflash::common::run_laguna_daemon() instead of the
                             // qwen35 + DFlash + DDTree pipeline below.
 #include "qwen35_daemon.h"  // arch dispatch - single-GPU qwen35 daemon mode
 #include "qwen35_layer_split.h" // multi-GPU layer-split daemon args
@@ -92,7 +92,7 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type);
 #include <random>
 #include <unordered_set>
 
-using namespace dflash27b;
+using namespace dflash::common;
 
 static SamplerCfg      g_sampler;
 static std::mt19937_64 g_sampler_rng{std::random_device{}()};
@@ -110,16 +110,16 @@ static std::mt19937_64 g_sampler_rng{std::random_device{}()};
 
 // ─── Small utilities — extracted to src/common/io_utils.h ──────────
 #include "io_utils.h"
-using dflash27b::read_int32_file;
-using dflash27b::write_int32_file;
-using dflash27b::stream_emit_fd;
-using dflash27b::argmax_f32;
-using dflash27b::write_binary_file;
-using dflash27b::read_binary_file_exact;
-using dflash27b::read_line_tail;
+using dflash::common::read_int32_file;
+using dflash::common::write_int32_file;
+using dflash::common::stream_emit_fd;
+using dflash::common::argmax_f32;
+using dflash::common::write_binary_file;
+using dflash::common::read_binary_file_exact;
+using dflash::common::read_line_tail;
 #if !defined(_WIN32)
-using dflash27b::read_exact_fd;
-using dflash27b::write_exact_fd;
+using dflash::common::read_exact_fd;
+using dflash::common::write_exact_fd;
 #endif
 
 // CPU sampler chain (SamplerCfg / sample_logits / parse_sampler_token) lives
@@ -134,12 +134,12 @@ using dflash27b::write_exact_fd;
 // The global `g_kq_stride_pad` below is set at init time and forwarded to
 // build_causal_mask / build_tree_mask (now in src/qwen35/attn_masks.h).
 #include "attn_masks.h"
-using dflash27b::KQ_MASK_PAD;
-using dflash27b::F16_ZERO;
-using dflash27b::F16_NEG_INF;
-using dflash27b::align_up;
-using dflash27b::build_causal_mask;
-using dflash27b::build_tree_mask;
+using dflash::common::KQ_MASK_PAD;
+using dflash::common::F16_ZERO;
+using dflash::common::F16_NEG_INF;
+using dflash::common::align_up;
+using dflash::common::build_causal_mask;
+using dflash::common::build_tree_mask;
 static int g_kq_stride_pad = KQ_MASK_PAD;   // overridden to 256 when TBQ KV is active
 static int g_max_ctx_override = 0;           // overridden by --max-ctx=N (default 4096)
 static int g_fa_window       = 2048;         // overridden by DFLASH27B_FA_WINDOW=N
@@ -150,50 +150,50 @@ static int g_draft_ctx_max   = 4096;        // draft context cap; --draft-ctx-ma
 // Extracted to src/qwen35/ddtree.{h,cpp}. Provides DDTree struct,
 // extract_draft_topk(), build_ddtree(), follow_verified_tree().
 #include "ddtree.h"
-using dflash27b::DDTree;
-using dflash27b::extract_draft_topk;
-using dflash27b::build_ddtree;
-using dflash27b::follow_verified_tree;
+using dflash::common::DDTree;
+using dflash::common::extract_draft_topk;
+using dflash::common::build_ddtree;
+using dflash::common::follow_verified_tree;
 
 // ─── StepGraph — extracted to src/qwen35/step_graph.h ──
 #include "step_graph.h"
-using dflash27b::StepGraph;
-using dflash27b::step_graph_free;
-using dflash27b::step_graph_destroy;
+using dflash::common::StepGraph;
+using dflash::common::step_graph_free;
+using dflash::common::step_graph_destroy;
 
 // ─── Peer access + DraftFeatureMirror — extracted to src/qwen35/ ──
 #include "peer_access.h"
 #include "dflash_feature_ring.h"
-using dflash27b::g_peer_access_opt_in;
-using dflash27b::g_peer_pair_ok_cache;
-using dflash27b::enable_peer_access_one_way;
-using dflash27b::enable_peer_access_pair;
-using dflash27b::cross_device_peer_memcpy_ok;
-using dflash27b::copy_peer_async;
-using dflash27b::DraftFeatureMirror;
-using dflash27b::draft_feature_mirror_free;
-using dflash27b::draft_feature_mirror_init;
-using dflash27b::draft_feature_mirror_can_view;
-using dflash27b::draft_feature_mirror_sync_range;
-using dflash27b::draft_feature_mirror_sync_tail;
+using dflash::common::g_peer_access_opt_in;
+using dflash::common::g_peer_pair_ok_cache;
+using dflash::common::enable_peer_access_one_way;
+using dflash::common::enable_peer_access_pair;
+using dflash::common::cross_device_peer_memcpy_ok;
+using dflash::common::copy_peer_async;
+using dflash::common::DraftFeatureMirror;
+using dflash::common::draft_feature_mirror_free;
+using dflash::common::draft_feature_mirror_init;
+using dflash::common::draft_feature_mirror_can_view;
+using dflash::common::draft_feature_mirror_sync_range;
+using dflash::common::draft_feature_mirror_sync_tail;
 
 // ─── Graph builders — extracted to src/qwen35/graph_builders.{h,cpp} ──
 #include "graph_builders.h"
 #include "dflash_draft_graph.h"
-using dflash27b::build_layer_step;
-using dflash27b::build_target_step;
-using dflash27b::build_target_step_tree;
-using dflash27b::build_draft_step;
-using dflash27b::build_lm_head_projection_step;
+using dflash::common::build_layer_step;
+using dflash::common::build_target_step;
+using dflash::common::build_target_step_tree;
+using dflash::common::build_draft_step;
+using dflash::common::build_lm_head_projection_step;
 
 // ─── Layer split types — extracted to src/qwen35/layer_split_types.h ──
 #include "layer_split_types.h"
-using dflash27b::LayerSplitRuntimeConfig;
-using dflash27b::TargetLayerSplitShard;
-using dflash27b::ActivationPair;
-using dflash27b::activation_pair_free;
-using dflash27b::activation_pair_init;
-using dflash27b::find_target_shard;
+using dflash::common::LayerSplitRuntimeConfig;
+using dflash::common::TargetLayerSplitShard;
+using dflash::common::ActivationPair;
+using dflash::common::activation_pair_free;
+using dflash::common::activation_pair_init;
+using dflash::common::find_target_shard;
 
 static bool parse_int_list(const char * text, std::vector<int> & out) {
     out.clear();
@@ -229,39 +229,39 @@ static bool parse_float_list(const char * text, std::vector<double> & out) {
 
 // ─── Draft IPC — extracted to src/qwen35/draft_ipc.{h,cpp} ──
 #include "dflash_draft_ipc.h"
-using dflash27b::DFlashDraftIpcClient;
-using dflash27b::copy_capture_slice_to_remote_draft;
-using dflash27b::stream_status;
-using dflash27b::run_dflash_draft_ipc_daemon;
+using dflash::common::DFlashDraftIpcClient;
+using dflash::common::copy_capture_slice_to_remote_draft;
+using dflash::common::stream_status;
+using dflash::common::run_dflash_draft_ipc_daemon;
 
 // ─── GGUF inspection — extracted to src/common/gguf_inspect.{h,cpp} ──
 #include "gguf_inspect.h"
 
 // ─── Layer ranges — extracted to src/common/layer_split_utils.{h,cpp} ──
 #include "layer_split_utils.h"
-using dflash27b::compute_layer_ranges;
+using dflash::common::compute_layer_ranges;
 
 // ─── Feature copy helpers — extracted to src/qwen35/feature_copy.{h,cpp} ──
 #include "dflash_capture.h"
-using dflash27b::target_capture_index;
-using dflash27b::copy_capture_slice_to_draft_ring;
-using dflash27b::copy_feature_ring_range_to_tensor;
+using dflash::common::target_capture_index;
+using dflash::common::copy_capture_slice_to_draft_ring;
+using dflash::common::copy_feature_ring_range_to_tensor;
 
 // ─── Layer-split forward — extracted to src/qwen35/layer_split_forward.{h,cpp} ──
 #include "layer_split_forward.h"
-using dflash27b::compute_target_split_argmax;
-using dflash27b::run_target_layer_split_forward;
-using dflash27b::free_target_layer_split_shards;
+using dflash::common::compute_target_split_argmax;
+using dflash::common::run_target_layer_split_forward;
+using dflash::common::free_target_layer_split_shards;
 
 
 // ─── Speculative decode — generic loop in common/, qwen35 layer-split adapter.
 #include "qwen35_layer_split_dflash_target.h"
 #include "common/dflash_spec_decode.h"
-using dflash27b::is_eos_tok;
+using dflash::common::is_eos_tok;
 
 // ─── Layer-split daemon — extracted to src/qwen35/layer_split_daemon.{h,cpp} ─
 #include "layer_split_daemon.h"
-using dflash27b::run_target_layer_split_request;
+using dflash::common::run_target_layer_split_request;
 
 static int run_target_layer_split_daemon(
         const char * target_path,
@@ -318,7 +318,7 @@ static int run_target_layer_split_harness(
         std::fprintf(stderr, "target layer split requires prompt/n_gen/out positional args\n");
         return 2;
     }
-    const int n_layer = dflash27b::inspect_gguf_model_info(target_path).n_layer;
+    const int n_layer = dflash::common::inspect_gguf_model_info(target_path).n_layer;
     if (n_layer <= 0) {
         std::fprintf(stderr, "target-split could not read qwen35.block_count\n");
         return 1;
@@ -712,7 +712,7 @@ int main(int argc, char ** argv) {
     // shape so we can route laguna requests to run_laguna_daemon() and
     // accept the no-draft argv layout server.py uses for that arch.
     #include "gguf_inspect.h"
-    const auto model_info   = dflash27b::inspect_gguf_model_info(target_path);
+    const auto model_info   = dflash::common::inspect_gguf_model_info(target_path);
     const std::string detected_arch = model_info.arch;
     const bool is_laguna = (detected_arch == "laguna");
     const bool is_qwen3  = (detected_arch == "qwen3");
@@ -972,13 +972,13 @@ int main(int argc, char ** argv) {
             "[test_dflash] arch=laguna -> dispatching to run_laguna_daemon "
             "(max_ctx=%d kv=%s chunk=%d stream_fd=%d). DFlash + DDTree disabled.\n",
             max_ctx_eff, ggml_type_name(kv), chunk, stream_fd);
-        dflash27b::LagunaDaemonArgs largs;
+        dflash::common::LagunaDaemonArgs largs;
         largs.target_path     = target_path;
         largs.device.max_ctx  = max_ctx_eff;
         largs.chunk           = chunk;
         largs.kv_type         = kv;
         largs.stream_fd       = stream_fd;
-        return dflash27b::run_laguna_daemon(largs);
+        return dflash::common::run_laguna_daemon(largs);
     }
 
     // ---- Arch dispatch: qwen3 targets to the dedicated daemon -----
@@ -987,13 +987,13 @@ int main(int argc, char ** argv) {
         std::fprintf(stderr,
             "[test_dflash] arch=qwen3 -> dispatching to run_qwen3_daemon "
             "(max_ctx=%d stream_fd=%d)\n", max_ctx_eff, stream_fd);
-        dflash27b::Qwen3DaemonArgs q3args;
+        dflash::common::Qwen3DaemonArgs q3args;
         q3args.model_path     = target_path;
         q3args.device.gpu     = target_gpu;
         q3args.device.max_ctx = max_ctx_eff;
         q3args.stream_fd      = stream_fd;
         q3args.chunk          = 512;
-        return dflash27b::run_qwen3_daemon(q3args);
+        return dflash::common::run_qwen3_daemon(q3args);
     }
 
     // ---- Arch dispatch: gemma4 targets to the dedicated daemon -----
@@ -1002,13 +1002,13 @@ int main(int argc, char ** argv) {
         std::fprintf(stderr,
             "[test_dflash] arch=gemma4 -> dispatching to run_gemma4_daemon "
             "(max_ctx=%d stream_fd=%d)\n", max_ctx_eff, stream_fd);
-        dflash27b::Gemma4DaemonArgs g4args;
+        dflash::common::Gemma4DaemonArgs g4args;
         g4args.model_path     = target_path;
         g4args.device.gpu     = target_gpu;
         g4args.device.max_ctx = max_ctx_eff;
         g4args.stream_fd      = stream_fd;
         g4args.chunk          = 512;
-        return dflash27b::run_gemma4_daemon(g4args);
+        return dflash::common::run_gemma4_daemon(g4args);
     }
 
     // Helper: write a committed token to the stream fd immediately (int32 LE).
@@ -1073,7 +1073,7 @@ int main(int argc, char ** argv) {
             return 2;
         }
         if (daemon_mode) {
-            dflash27b::Qwen35LayerSplitDaemonArgs lsargs;
+            dflash::common::Qwen35LayerSplitDaemonArgs lsargs;
             lsargs.target_path = target_path;
             lsargs.draft_path  = draft_path;
             lsargs.device.layer_split_gpus    = target_gpus;
@@ -1127,7 +1127,7 @@ int main(int argc, char ** argv) {
     // loop remains for one-shot, test-window, and profile-scaling modes.
     if (daemon_mode && target_gpus.size() <= 1) {
         const int max_ctx_eff = g_max_ctx_override > 0 ? g_max_ctx_override : 4096;
-        dflash27b::Qwen35DaemonArgs qargs;
+        dflash::common::Qwen35DaemonArgs qargs;
         qargs.target_path       = target_path;
         qargs.draft_path        = draft_path;
         qargs.device.gpu        = target_gpu;
@@ -1149,7 +1149,7 @@ int main(int argc, char ** argv) {
         std::fprintf(stderr,
             "[test_dflash] arch=qwen35 daemon -> dispatching to run_qwen35_daemon "
             "(max_ctx=%d stream_fd=%d)\n", max_ctx_eff, stream_fd);
-        return dflash27b::run_qwen35_daemon(qargs);
+        return dflash::common::run_qwen35_daemon(qargs);
     }
 
     const bool split_gpus = target_gpu != draft_gpu;
@@ -1509,7 +1509,7 @@ int main(int argc, char ** argv) {
     bool target_parked = false;
     bool draft_parked  = false;
     // pflash drafter (lazy-loaded on first `compress` command)
-    dflash27b::DrafterContext drafter_ctx;
+    dflash::common::DrafterContext drafter_ctx;
     bool drafter_loaded = false;
 
     while (true) {
@@ -1558,7 +1558,7 @@ int main(int argc, char ** argv) {
             }
             if (line == "free drafter" || line == "drafter free") {
                 if (drafter_loaded) {
-                    dflash27b::free_drafter(drafter_ctx);
+                    dflash::common::free_drafter(drafter_ctx);
                     drafter_loaded = false;
                     std::printf("[drafter] freed\n"); std::fflush(stdout);
                 }
@@ -1618,8 +1618,8 @@ int main(int argc, char ** argv) {
                                  "[compress] bad args, need: <bin> <keep_x1000> <drafter_gguf> [drafter_arch]\n");
                     stream_emit(-1); continue;
                 }
-                dflash27b::DrafterArch drafter_arch;
-                if (!dflash27b::parse_drafter_arch(arch_name, drafter_arch)) {
+                dflash::common::DrafterArch drafter_arch;
+                if (!dflash::common::parse_drafter_arch(arch_name, drafter_arch)) {
                     std::fprintf(stderr, "[compress] bad drafter_arch: %s\n", arch_name);
                     stream_emit(-1); continue;
                 }
@@ -1651,30 +1651,30 @@ int main(int argc, char ** argv) {
                 }
 
                 if (!drafter_loaded) {
-                    if (!dflash27b::load_drafter(drafter_path, /*gpu_layers=*/999, drafter_arch, drafter_ctx)) {
+                    if (!dflash::common::load_drafter(drafter_path, /*gpu_layers=*/999, drafter_arch, drafter_ctx)) {
                         std::fprintf(stderr, "[compress] load_drafter failed: %s\n",
                                      dflash27b_last_error());
                         stream_emit(-1); continue;
                     }
                     drafter_loaded = true;
-                    if (drafter_arch == dflash27b::DrafterArch::Qwen3_0p6b) {
+                    if (drafter_arch == dflash::common::DrafterArch::Qwen3_0p6b) {
                         std::printf("[drafter] loaded %s arch=%s (n_layer=%d n_head=%d n_head_kv=%d)\n",
-                                    drafter_path, dflash27b::drafter_arch_name(drafter_arch), drafter_ctx.weights.n_layer,
+                                    drafter_path, dflash::common::drafter_arch_name(drafter_arch), drafter_ctx.weights.n_layer,
                                     drafter_ctx.weights.n_head, drafter_ctx.weights.n_head_kv);
                     } else {
                         std::printf("[drafter] loaded %s arch=%s\n",
-                                    drafter_path, dflash27b::drafter_arch_name(drafter_arch));
+                                    drafter_path, dflash::common::drafter_arch_name(drafter_arch));
                     }
                     std::fflush(stdout);
                 } else if (drafter_ctx.arch != drafter_arch) {
                     std::fprintf(stderr, "[compress] requested arch=%s but loaded arch=%s\n",
-                                 dflash27b::drafter_arch_name(drafter_arch),
-                                 dflash27b::drafter_arch_name(drafter_ctx.arch));
+                                 dflash::common::drafter_arch_name(drafter_arch),
+                                 dflash::common::drafter_arch_name(drafter_ctx.arch));
                     stream_emit(-1); continue;
                 }
 
                 float keep = (float)keep_x1000 / 1000.0f;
-                auto compressed = dflash27b::drafter_score_and_compress(
+                auto compressed = dflash::common::drafter_score_and_compress(
                     drafter_ctx, src_ids, keep);
                 std::printf("[compress] %zu -> %zu tokens (keep_ratio=%.3f)\n",
                             src_ids.size(), compressed.size(), keep);

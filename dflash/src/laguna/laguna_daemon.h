@@ -17,7 +17,7 @@
 #include <string>
 #include "ggml.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct LagunaDaemonArgs {
     std::string     target_path;       // path to laguna-*.gguf
@@ -37,4 +37,4 @@ struct LagunaDaemonArgs {
 // `exit`, or EOF. Returns the process exit code (0 on clean shutdown).
 int run_laguna_daemon(const LagunaDaemonArgs & args);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

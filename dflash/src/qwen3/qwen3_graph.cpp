@@ -51,7 +51,7 @@
 #include <string>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 namespace {
 
@@ -865,4 +865,4 @@ bool forward_qwen3_drafter_model(
     return true;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

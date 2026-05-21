@@ -7,7 +7,7 @@
 #include <cmath>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 void extract_draft_topk(const float * logits,
                         int n_positions, int vocab, int K,
@@ -223,4 +223,4 @@ std::vector<int> follow_verified_tree(const DDTree & tree,
     return accepted;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

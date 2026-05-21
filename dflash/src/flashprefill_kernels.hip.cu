@@ -23,7 +23,7 @@
 #include <hip/hip_bfloat16.h>
 #include <rocwmma/rocwmma.hpp>
 
-namespace dflash27b {
+namespace dflash::common {
 namespace flashprefill {
 
 // ---- Kernel 1: compute_mean_vector ----
@@ -735,4 +735,4 @@ extern "C" void launch_block_select(
 // launch_rms_norm_mul_w_f32 is defined in rms_norm_hip.cu (compiled for all HIP builds).
 
 } // namespace flashprefill
-} // namespace dflash27b
+} // namespace dflash::common

@@ -55,7 +55,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 namespace {
 
@@ -646,4 +646,4 @@ void free_draft_weights(DraftWeights & w) {
     w.out_norm = nullptr;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

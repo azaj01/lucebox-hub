@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct Qwen3BackendConfig {
     const char *    model_path = nullptr;
@@ -144,4 +144,4 @@ private:
     std::vector<float> last_logits_;  // logits from last prefill chunk
 };
 
-}  // namespace dflash27b
+}  // namespace dflash::common

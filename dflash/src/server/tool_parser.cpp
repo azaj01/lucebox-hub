@@ -16,7 +16,7 @@
 #include <regex>
 #include <sstream>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
@@ -465,4 +465,4 @@ ToolParseResult parse_tool_calls(const std::string & text, const json & tools) {
     return result;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

@@ -30,7 +30,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 namespace {
 
@@ -795,4 +795,4 @@ std::vector<int32_t> drafter_score_and_compress(
     return out;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

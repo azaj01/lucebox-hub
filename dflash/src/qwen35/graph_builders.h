@@ -21,7 +21,7 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 // Layer-segmented prefill: process one target layer for chunk_start..chunk_start+n_tokens.
 bool build_layer_step(
@@ -73,4 +73,4 @@ bool build_lm_head_projection_step(
     ggml_backend_t backend,
     int n_tokens);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

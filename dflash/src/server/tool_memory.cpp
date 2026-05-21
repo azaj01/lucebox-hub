@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace dflash27b {
+namespace dflash::common {
 
 ToolMemory::ToolMemory(size_t max_entries, size_t max_bytes)
     : max_entries_(max_entries)
@@ -136,4 +136,4 @@ void ToolMemory::prune() {
     }
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

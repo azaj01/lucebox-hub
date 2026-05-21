@@ -20,7 +20,7 @@
 #include <cmath>
 #include <sstream>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── Cache management ───────────────────────────────────────────────────
 
@@ -1031,7 +1031,7 @@ bool Qwen3Backend::handle_compress(const std::string & line, const DaemonIO & io
 
 void Qwen3Backend::free_drafter() {
     if (drafter_loaded_) {
-        dflash27b::free_drafter(drafter_ctx_);
+        dflash::common::free_drafter(drafter_ctx_);
         drafter_loaded_ = false;
     }
 }
@@ -1060,4 +1060,4 @@ void Qwen3Backend::shutdown() {
     }
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

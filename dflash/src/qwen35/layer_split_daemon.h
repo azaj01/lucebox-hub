@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // Handle one inference request over a set of layer-split shards.
 // Runs prefill, then either spec-decode (if run_dflash && draft available)
@@ -38,4 +38,4 @@ bool run_target_layer_split_request(
         int draft_ctx_max,
         int stream_fd = -1);
 
-} // namespace dflash27b
+} // namespace dflash::common

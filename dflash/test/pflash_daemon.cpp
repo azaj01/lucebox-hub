@@ -30,7 +30,7 @@
 #include <unistd.h>
 #endif
 
-using namespace dflash27b;
+using namespace dflash::common;
 
 static std::vector<int32_t> read_counted_i32_file(const std::string & path) {
     std::ifstream f(path, std::ios::binary);

@@ -3,7 +3,7 @@
 
 #include "ggml.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct DraftWeights; // fwd
 
@@ -30,4 +30,4 @@ DraftGraphOutputs build_draft_graph(
     const DraftWeights &      w,
     const DraftGraphInputs &  in);
 
-} // namespace dflash27b
+} // namespace dflash::common

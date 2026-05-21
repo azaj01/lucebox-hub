@@ -10,7 +10,7 @@
 
 #include <cstdio>
 
-namespace dflash27b {
+namespace dflash::common {
 
 int run_qwen35_daemon(const Qwen35DaemonArgs & args) {
     Qwen35Config cfg;
@@ -42,4 +42,4 @@ int run_qwen35_daemon(const Qwen35DaemonArgs & args) {
     return run_daemon(backend, dargs);
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

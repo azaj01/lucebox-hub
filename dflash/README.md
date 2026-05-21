@@ -210,7 +210,7 @@ Full `bench_llm.py` suite on Qwen3.6-27B UD-Q4_K_XL, 10 prompts, n_gen=256, RTX 
 and dispatches by arch:
 
   - `qwen35` / `qwen36` → existing DFlash + DDTree pipeline (no change).
-  - `laguna` → `dflash27b::run_laguna_daemon()` (no spec-decode, no DDTree).
+  - `laguna` → `dflash::common::run_laguna_daemon()` (no spec-decode, no DDTree).
 
 The daemon stdin/stream-fd protocol is identical, so `scripts/server.py`
 drives both arches end-to-end. The only thing the user changes is `--target`.

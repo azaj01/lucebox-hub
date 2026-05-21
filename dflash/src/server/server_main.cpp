@@ -1,4 +1,4 @@
-// dflash_server — native C++ HTTP server for dflash27b.
+// dflash_server — native C++ HTTP server for dflash::common.
 //
 // Replaces the Python server.py for production use. Owns the ModelBackend
 // directly (no subprocess, no pipe protocol), enabling:
@@ -22,7 +22,7 @@
 #include <memory>
 #include <string>
 
-using namespace dflash27b;
+using namespace dflash::common;
 
 // Global server pointer for signal handling.
 static HttpServer * g_server = nullptr;

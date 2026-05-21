@@ -1,4 +1,4 @@
-// BPE tokenizer for dflash27b native server.
+// BPE tokenizer for dflash::common native server.
 //
 // Loads vocabulary (token strings) and merge rules from GGUF metadata,
 // then provides encode (text → token IDs) and decode (token IDs → text).
@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 class Tokenizer {
 public:
@@ -82,4 +82,4 @@ private:
     PreTokenizer pre_type_ = PreTokenizer::QWEN35;
 };
 
-}  // namespace dflash27b
+}  // namespace dflash::common

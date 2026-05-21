@@ -14,7 +14,7 @@ static void check(bool ok, const char * msg) {
 }
 
 int main() {
-    using dflash27b::restore_prompt_delta;
+    using dflash::common::restore_prompt_delta;
 
     // Regression for #216: RESTORE receives the full prompt, but the backend
     // must prefill only the suffix that was not covered by the cached snapshot.

@@ -7,7 +7,7 @@
 #include <string>
 #include <utility>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct ReasoningResult {
     std::string content;    // cleaned content (think tags removed)
@@ -22,4 +22,4 @@ ReasoningResult parse_reasoning(const std::string & text,
                                 bool thinking_enabled = true,
                                 bool started_in_thinking = false);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

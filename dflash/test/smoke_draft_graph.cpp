@@ -30,7 +30,7 @@
 #include <random>
 #include <vector>
 
-using namespace dflash27b;
+using namespace dflash::common;
 
 // Convert fp32 -> bf16 (truncation)
 static uint16_t f32_to_bf16(float f) {

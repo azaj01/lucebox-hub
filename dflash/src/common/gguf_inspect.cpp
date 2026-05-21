@@ -5,7 +5,7 @@
 #include <cstring>
 #include <string>
 
-namespace dflash27b {
+namespace dflash::common {
 
 GgufModelInfo inspect_gguf_model_info(const char * path) {
     GgufModelInfo info;
@@ -36,4 +36,4 @@ GgufModelInfo inspect_gguf_model_info(const char * path) {
     return info;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

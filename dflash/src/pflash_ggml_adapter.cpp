@@ -11,7 +11,7 @@ static int pflash_adapter(
     int batch, int seq_len, int n_q_heads, int n_k_heads, int head_dim,
     float scale, float alpha)
 {
-    dflash27b::flashprefill::FlashPrefillConfig cfg;
+    dflash::common::flashprefill::FlashPrefillConfig cfg;
     if (alpha >= 1.0f) {
         // alpha >= 1.0 means "select all blocks" — configure for dense attention
         cfg.alpha          = 0.0f;
@@ -21,7 +21,7 @@ static int pflash_adapter(
     } else {
         cfg.alpha = alpha;
     }
-    return dflash27b::flashprefill::flash_prefill_forward_bf16(
+    return dflash::common::flashprefill::flash_prefill_forward_bf16(
         Q, K, V, O,
         batch, seq_len, n_q_heads, n_k_heads, head_dim,
         scale, cfg);

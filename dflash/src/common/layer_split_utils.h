@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // Compute [begin, end) layer ranges for each GPU shard.
 // If weights is empty, splits layers equally.
@@ -28,4 +28,4 @@ std::string validate_device_placement(
     const DevicePlacement & dp,
     int cuda_device_count);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

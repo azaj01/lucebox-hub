@@ -33,7 +33,7 @@
 
 #include <cmath>
 
-namespace dflash27b {
+namespace dflash::common {
 
 DraftGraphOutputs build_draft_graph(
     ggml_context *            ctx,
@@ -182,4 +182,4 @@ DraftGraphOutputs build_draft_graph(
     return og;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

@@ -19,7 +19,7 @@
 
 #include "internal.h"  // CpuEmbedder
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct Gemma4Layer {
     // Pre-attn norm
@@ -181,4 +181,4 @@ bool gemma4_step(
     int                     kv_start,
     std::vector<float> &    out_logits);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

@@ -28,7 +28,7 @@
 #include "ggml-cuda.h"
 #include "ggml-alloc.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 static constexpr float GEMMA4_EPS = 1e-6f;
 
@@ -445,4 +445,4 @@ bool gemma4_step(
     return true;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

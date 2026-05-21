@@ -21,7 +21,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── Construction / initialisation ───────────────────────────────────────
 
@@ -398,7 +398,7 @@ bool LagunaBackend::handle_compress(const std::string & line,
 
 void LagunaBackend::free_drafter() {
     if (drafter_loaded_) {
-        dflash27b::free_drafter(drafter_ctx_);
+        dflash::common::free_drafter(drafter_ctx_);
         drafter_loaded_ = false;
         std::printf("[drafter] freed\n"); std::fflush(stdout);
     }
@@ -409,7 +409,7 @@ void LagunaBackend::free_drafter() {
 void LagunaBackend::shutdown() {
     for (auto & snap : snapshots_) laguna_snapshot_free(snap);
     if (drafter_loaded_) {
-        dflash27b::free_drafter(drafter_ctx_);
+        dflash::common::free_drafter(drafter_ctx_);
         drafter_loaded_ = false;
     }
     if (!target_parked_) {
@@ -424,4 +424,4 @@ void LagunaBackend::shutdown() {
     }
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

@@ -18,7 +18,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 namespace flashprefill {
 
 // score: [B, M, N, H] row-major (B outer, H fastest).
@@ -84,4 +84,4 @@ void block_select_host(
 }
 
 } // namespace flashprefill
-} // namespace dflash27b
+} // namespace dflash::common

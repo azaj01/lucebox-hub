@@ -55,7 +55,7 @@
 #include <unistd.h>
 #endif
 
-namespace dflash27b {
+namespace dflash::common {
 
 namespace {
 
@@ -473,4 +473,4 @@ void free_laguna_target_weights(LagunaTargetWeights & w) {
     w.output   = nullptr;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

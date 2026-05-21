@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // A flat DFS-ordered tree built from the draft's top-K softmax distributions.
 // Slot 0 is the tree root (the bonus token from the previous spec round);
@@ -61,4 +61,4 @@ std::vector<int> follow_verified_tree(const DDTree & tree,
                                       int & out_next_token,
                                       int * out_node_idx = nullptr);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

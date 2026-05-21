@@ -39,7 +39,7 @@
 #include <unistd.h>
 #endif
 
-namespace dflash27b {
+namespace dflash::common {
 
 namespace {
 
@@ -346,4 +346,4 @@ bool load_draft_gguf(const std::string & path,
     return true;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

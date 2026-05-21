@@ -7,7 +7,7 @@
 #include <chrono>
 #include <cstdio>
 
-namespace dflash27b {
+namespace dflash::common {
 
 static const char THINK_OPEN[]  = "<think>";
 static const char THINK_CLOSE[] = "</think>";
@@ -563,4 +563,4 @@ std::string SseEmitter::finish_reason() const {
     return tool_calls_.empty() ? "stop" : "tool_calls";
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

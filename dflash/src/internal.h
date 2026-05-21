@@ -1,4 +1,4 @@
-// Internal-only shared header for dflash27b library sources.
+// Internal-only shared header for dflash::common library sources.
 // Not installed, not exposed in the public API.
 
 #pragma once
@@ -24,7 +24,7 @@
 
 #include "dflash27b.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 // Single source of truth for error reporting.
 // All loaders / graph builders push into this via set_last_error(...).
@@ -536,7 +536,7 @@ ggml_tensor * build_qwen35_layer(
     ggml_tensor *         q_tail_capture = nullptr,
     int                   q_tail_start = 0);
 
-} // namespace dflash27b
+} // namespace dflash::common
 
 #if defined(GGML_USE_CUDA) && !defined(GGML_USE_HIP)
 #include <cuda_runtime.h>

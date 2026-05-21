@@ -25,7 +25,7 @@
 #define ssize_t long
 #endif
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── DaemonIO ────────────────────────────────────────────────────────────
 
@@ -424,4 +424,4 @@ int run_daemon(ModelBackend & backend, const DaemonLoopArgs & args) {
     return 0;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

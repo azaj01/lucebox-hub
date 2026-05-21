@@ -26,7 +26,7 @@
 #include <string>
 #include <vector>
 
-using namespace dflash27b;
+using namespace dflash::common;
 
 struct OracleMeta {
     int ctx_len = 0;

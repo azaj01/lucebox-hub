@@ -248,7 +248,7 @@ int main() {
         CK(cudaMemcpy(bdK, bK.data(), bK.size() * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice));
         CK(cudaMemcpy(bdV, bV.data(), bV.size() * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice));
 
-        dflash27b::flashprefill::FlashPrefillConfig cfg;
+        dflash::common::flashprefill::FlashPrefillConfig cfg;
         cfg.block_size = BL;
         cfg.attention_sink = 2;
         cfg.window = 4;
@@ -256,7 +256,7 @@ int main() {
         cfg.alpha = 0.12f;
 
         // Warm-up
-        dflash27b::flashprefill::flash_prefill_forward_bf16(
+        dflash::common::flashprefill::flash_prefill_forward_bf16(
             bdQ, bdK, bdV, bdO, BB, BS, BH, BHk, BD,
             1.0f / std::sqrt((float)BD), cfg);
         CK(cudaDeviceSynchronize());
@@ -266,7 +266,7 @@ int main() {
         cudaEventCreate(&e_b);
         cudaEventRecord(e_a);
         for (int it = 0; it < 5; ++it) {
-            dflash27b::flashprefill::flash_prefill_forward_bf16(
+            dflash::common::flashprefill::flash_prefill_forward_bf16(
                 bdQ, bdK, bdV, bdO, BB, BS, BH, BHk, BD,
                 1.0f / std::sqrt((float)BD), cfg);
         }

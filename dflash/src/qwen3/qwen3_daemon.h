@@ -5,7 +5,7 @@
 #include "device_placement.h"
 #include <string>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct Qwen3DaemonArgs {
     const char *    model_path = nullptr;
@@ -17,4 +17,4 @@ struct Qwen3DaemonArgs {
 
 int run_qwen3_daemon(const Qwen3DaemonArgs & args);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

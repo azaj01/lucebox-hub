@@ -28,7 +28,7 @@
 #include <string>
 #include <cstddef>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── Configuration passed at construction ────────────────────────────────
 
@@ -182,4 +182,4 @@ private:
     int verify_tree(int committed, const DDTree & tree);
 };
 
-}  // namespace dflash27b
+}  // namespace dflash::common

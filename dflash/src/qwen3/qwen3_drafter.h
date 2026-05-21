@@ -23,7 +23,7 @@
 struct ggml_backend;
 typedef struct ggml_backend * ggml_backend_t;
 
-namespace dflash27b {
+namespace dflash::common {
 
 enum class DrafterArch {
     Qwen3_0p6b,
@@ -76,4 +76,4 @@ std::vector<int32_t> drafter_score_and_compress(
     int    n_lookahead = 8,
     int    pool_kernel = 13);
 
-} // namespace dflash27b
+} // namespace dflash::common

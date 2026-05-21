@@ -12,7 +12,7 @@
 #include <vector>
 #include "device_runtime.h"
 
-namespace dflash27b {
+namespace dflash::common {
 namespace flashprefill {
 
 // Kernel launcher declarations — architecture-specific.
@@ -637,4 +637,4 @@ int flash_prefill_forward_f16(
 }
 
 } // namespace flashprefill
-} // namespace dflash27b
+} // namespace dflash::common

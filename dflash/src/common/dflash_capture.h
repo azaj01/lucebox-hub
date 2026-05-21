@@ -7,7 +7,7 @@
 
 #pragma once
 
-namespace dflash27b {
+namespace dflash::common {
 
 // Linear search for layer_idx in capture_layer_ids[0..n_capture_layers).
 // Returns the capture index (0..n_capture_layers-1) on hit, -1 on miss.
@@ -15,4 +15,4 @@ int target_capture_index(const int * capture_layer_ids,
                          int n_capture_layers,
                          int layer_idx);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

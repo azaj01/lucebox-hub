@@ -4,7 +4,7 @@
 
 #include <cstdio>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── build_layer_step ────────────────────────────────────────────
 
@@ -260,4 +260,4 @@ bool build_lm_head_projection_step(
     return ggml_gallocr_alloc_graph(sg.alloc, sg.gf);
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

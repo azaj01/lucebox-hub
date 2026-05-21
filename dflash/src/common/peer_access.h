@@ -15,7 +15,7 @@
 
 #include "gpu_runtime_compat.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── global state ────────────────────────────────────────────────
 // Set from argv: opt into cudaMemcpyPeerAsync for cross-device copies.
@@ -34,4 +34,4 @@ bool copy_peer_async(void * dst, int dst_device,
                      size_t bytes,
                      cudaStream_t stream = nullptr);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

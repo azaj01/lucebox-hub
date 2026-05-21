@@ -27,7 +27,7 @@
 #include "ggml-backend.h"
 #include "ggml-cuda.h"
 
-using namespace dflash27b;
+using namespace dflash::common;
 
 // Chunked prefill loop on top of the shared laguna_step() helper. Reports
 // total prefill time and the argmax / logit at the LAST chunk.

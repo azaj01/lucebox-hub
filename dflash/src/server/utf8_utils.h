@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <string>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // Snap a byte offset back to a UTF-8 code-point boundary.
 // Returns the largest position <= `pos` that doesn't split a multi-byte sequence.
@@ -74,4 +74,4 @@ inline std::string utf8_sanitize(const std::string & s) {
     return out;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

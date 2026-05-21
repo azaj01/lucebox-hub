@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct DraftWeights;  // forward-decl from internal.h
 
@@ -50,4 +50,4 @@ bool run_dflash_spec_decode(
         int stream_fd = -1,
         DFlashDraftIpcClient * remote_draft = nullptr);
 
-} // namespace dflash27b
+} // namespace dflash::common

@@ -29,7 +29,7 @@
 #include "ggml-backend.h"
 #include "ggml-cuda.h"
 
-using namespace dflash27b;
+using namespace dflash::common;
 
 static std::vector<int> parse_csv(const std::string & s, std::vector<int> dflt) {
     if (s.empty()) return dflt;

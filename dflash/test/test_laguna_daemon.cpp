@@ -1,4 +1,4 @@
-// Thin wrapper around dflash27b::run_laguna_daemon().
+// Thin wrapper around dflash::common::run_laguna_daemon().
 //
 // Kept as a separate binary so scripts/laguna_pflash_niah.py can spawn the
 // laguna daemon directly without going through test_dflash. The actual
@@ -28,7 +28,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    dflash27b::LagunaDaemonArgs args;
+    dflash::common::LagunaDaemonArgs args;
     args.target_path = argv[1];
 
     auto need_arg = [&](int i) {
@@ -60,5 +60,5 @@ int main(int argc, char ** argv) {
         }
     }
 
-    return dflash27b::run_laguna_daemon(args);
+    return dflash::common::run_laguna_daemon(args);
 }

@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct DFlashTarget {
     virtual ~DFlashTarget() = default;
@@ -74,4 +74,4 @@ struct DFlashTarget {
     virtual const std::vector<int> & capture_layer_ids() const = 0;
 };
 
-} // namespace dflash27b
+} // namespace dflash::common

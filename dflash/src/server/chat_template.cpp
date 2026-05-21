@@ -2,7 +2,7 @@
 
 #include "chat_template.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 // Qwen3.5 tool preamble — matches the official Jinja template exactly.
 static const char QWEN3_TOOL_PREAMBLE[] =
@@ -155,4 +155,4 @@ std::string render_chat_template(
     return result;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

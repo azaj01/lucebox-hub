@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // Minimum alignment required by ggml flash_attn_ext for mask rows.
 static constexpr int KQ_MASK_PAD = 32;
@@ -75,4 +75,4 @@ inline void build_tree_mask(const DDTree & tree, int past_length,
     }
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

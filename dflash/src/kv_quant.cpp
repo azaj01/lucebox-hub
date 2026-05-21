@@ -1,4 +1,4 @@
-// KV-cache quantisation helpers for dflash27b.
+// KV-cache quantisation helpers for dflash::common.
 //
 // Centralises the supported (K, V) ggml_type pair table and environment-variable
 // resolution that was previously inlined in qwen35_target_graph.cpp.

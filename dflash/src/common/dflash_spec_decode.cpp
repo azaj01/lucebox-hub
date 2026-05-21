@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 namespace {
 // RAII guard so any early `return false` path frees the per-call draft graph.
@@ -205,5 +205,5 @@ bool run_dflash_spec_decode(
     return true;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common
 

@@ -39,7 +39,7 @@
 #include <mma.h>
 #endif
 
-namespace dflash27b {
+namespace dflash::common {
 namespace flashprefill {
 
 // ── cp.async helpers (sm_8x) ─────────────────────────────────────────
@@ -1047,6 +1047,6 @@ extern "C" void launch_block_select(
 }
 
 } // namespace flashprefill
-} // namespace dflash27b
+} // namespace dflash::common
 
 #endif // !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 800

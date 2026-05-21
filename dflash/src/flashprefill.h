@@ -32,7 +32,7 @@
 #include <cstdint>
 #include "ggml-backend.h"
 
-namespace dflash27b {
+namespace dflash::common {
 namespace flashprefill {
 
 // Algorithmic parameters for the FlashPrefill selection + sparse forward.
@@ -98,4 +98,4 @@ extern "C" void dflash_bsa_free_persistent();
 #endif
 
 } // namespace flashprefill
-} // namespace dflash27b
+} // namespace dflash::common

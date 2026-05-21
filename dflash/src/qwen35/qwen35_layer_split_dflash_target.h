@@ -21,7 +21,7 @@
 
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 class Qwen35LayerSplitDFlashTarget : public DFlashTarget {
 public:
@@ -66,4 +66,4 @@ private:
     StepGraph        proj_sg_;
 };
 
-}  // namespace dflash27b
+}  // namespace dflash::common

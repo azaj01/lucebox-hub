@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct LayerSplitDaemonConfig {
     const char * target_path = nullptr;
@@ -43,4 +43,4 @@ struct LayerSplitDaemonConfig {
 // Run the layer-split daemon event loop. Returns exit code (0 = success).
 int run_layer_split_daemon(const LayerSplitDaemonConfig & cfg);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

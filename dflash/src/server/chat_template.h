@@ -1,4 +1,4 @@
-// Chat template renderer for dflash27b native server.
+// Chat template renderer for dflash::common native server.
 //
 // Renders chat messages (system/user/assistant/tool) into the model-specific
 // token format. Hard-coded for supported architectures:
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // A single message in a chat conversation.
 struct ChatMessage {
@@ -49,4 +49,4 @@ std::string render_chat_template(
 // Detect the appropriate chat format for an architecture.
 ChatFormat chat_format_for_arch(const std::string & arch);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

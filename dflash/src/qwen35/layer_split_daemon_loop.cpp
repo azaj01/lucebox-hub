@@ -20,7 +20,7 @@
 #include <random>
 #include <string>
 
-namespace dflash27b {
+namespace dflash::common {
 
 int run_layer_split_daemon(const LayerSplitDaemonConfig & cfg) {
     const auto info = inspect_gguf_model_info(cfg.target_path);
@@ -192,4 +192,4 @@ int run_layer_split_daemon(const LayerSplitDaemonConfig & cfg) {
     return 0;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

@@ -21,7 +21,7 @@
 #  include <unistd.h>
 #endif
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── Binary file I/O ────────────────────────────────────────────────
 
@@ -134,4 +134,4 @@ static inline int argmax_f32(const float * x, int n) {
     return best;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

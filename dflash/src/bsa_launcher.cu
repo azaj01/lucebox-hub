@@ -28,7 +28,7 @@ template<typename T, int Headdim, bool Is_causal>
 void run_mha_fwd_block_(Flash_fwd_params &params, cudaStream_t stream);
 }
 
-namespace dflash27b {
+namespace dflash::common {
 namespace flashprefill {
 
 namespace {
@@ -275,4 +275,4 @@ fail:
 }
 
 }  // namespace flashprefill
-}  // namespace dflash27b
+}  // namespace dflash::common

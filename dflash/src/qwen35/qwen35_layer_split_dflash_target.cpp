@@ -6,7 +6,7 @@
 #include "graph_builders.h"
 #include "step_graph.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 Qwen35LayerSplitDFlashTarget::~Qwen35LayerSplitDFlashTarget() {
     step_graph_destroy(proj_sg_);
@@ -104,4 +104,4 @@ const std::vector<int> & Qwen35LayerSplitDFlashTarget::capture_layer_ids() const
     return capture_ids_;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

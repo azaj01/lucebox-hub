@@ -19,7 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct DraftFeatureMirror {
     ggml_context * ctx = nullptr;
@@ -88,4 +88,4 @@ bool copy_feature_ring_range_to_tensor(
     int start_pos,
     int n_tokens);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

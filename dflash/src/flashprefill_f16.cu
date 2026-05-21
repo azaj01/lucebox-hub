@@ -19,7 +19,7 @@
 #include <cuda_fp16.h>
 #include <mma.h>
 
-namespace dflash27b {
+namespace dflash::common {
 namespace flashprefill {
 
 // ── Kernel 1: compute_mean_vector (F16) ──────────────────────────────
@@ -673,6 +673,6 @@ extern "C" void launch_block_select_f16(
 }
 
 } // namespace flashprefill
-} // namespace dflash27b
+} // namespace dflash::common
 
 #endif // !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 700

@@ -16,7 +16,7 @@ extern "C++" to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type);
 
 #include "gpu_runtime_compat.h"
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── internal helpers ────────────────────────────────────────────
 
@@ -236,4 +236,4 @@ bool copy_feature_ring_range_to_tensor(
     return cudaDeviceSynchronize() == cudaSuccess;
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

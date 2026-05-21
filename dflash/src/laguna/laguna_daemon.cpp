@@ -16,7 +16,7 @@
 
 #include <cstdio>
 
-namespace dflash27b {
+namespace dflash::common {
 
 int run_laguna_daemon(const LagunaDaemonArgs & args) {
     LagunaBackendArgs bargs;
@@ -36,4 +36,4 @@ int run_laguna_daemon(const LagunaDaemonArgs & args) {
     return run_daemon(backend, dargs);
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

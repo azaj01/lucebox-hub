@@ -6,7 +6,7 @@
 
 #include <cstdio>
 
-namespace dflash27b {
+namespace dflash::common {
 
 int run_gemma4_daemon(const Gemma4DaemonArgs & args) {
     Gemma4BackendConfig cfg;
@@ -26,4 +26,4 @@ int run_gemma4_daemon(const Gemma4DaemonArgs & args) {
     return run_daemon(backend, da);
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

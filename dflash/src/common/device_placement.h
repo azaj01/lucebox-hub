@@ -9,7 +9,7 @@
 
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct DevicePlacement {
     int gpu = 0;                              // primary GPU (single-GPU mode)
@@ -28,4 +28,4 @@ struct DevicePlacement {
     }
 };
 
-}  // namespace dflash27b
+}  // namespace dflash::common

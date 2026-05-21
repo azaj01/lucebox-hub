@@ -30,7 +30,7 @@
 
 #include "internal.h"  // for CpuEmbedder
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct LagunaTargetLayer {
     // Pre-attn + pre-ffn norms (Laguna has only these two; no post norms).
@@ -252,4 +252,4 @@ bool laguna_step(
     bool                        no_mask,
     std::vector<float> &        out_logits);
 
-} // namespace dflash27b
+} // namespace dflash::common

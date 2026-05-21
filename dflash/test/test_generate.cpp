@@ -46,7 +46,7 @@
 #include <unistd.h>
 #endif
 
-using namespace dflash27b;
+using namespace dflash::common;
 
 struct StepGraph {
     ggml_context *    ctx = nullptr;

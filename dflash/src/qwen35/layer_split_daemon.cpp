@@ -12,7 +12,7 @@
 #include <cstdlib>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 bool run_target_layer_split_request(
         std::vector<TargetLayerSplitShard> & shards,
@@ -87,4 +87,4 @@ bool run_target_layer_split_request(
     return true;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common

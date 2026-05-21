@@ -31,7 +31,7 @@
 #  include <unistd.h>
 #endif
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ── IPC Client (parent process) ─────────────────────────────────────
 
@@ -120,4 +120,4 @@ int run_dflash_draft_ipc_daemon(const char * draft_path,
                                 int draft_gpu,
                                 int stream_fd);
 
-} // namespace dflash27b
+} // namespace dflash::common

@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct Gemma4BackendConfig {
     const char *    model_path = nullptr;
@@ -89,4 +89,4 @@ private:
                    const DaemonIO & io);
 };
 
-}  // namespace dflash27b
+}  // namespace dflash::common

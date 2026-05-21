@@ -5,7 +5,7 @@
 
 #include <cstdio>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // Build draft graph at a given ctx_len into sg. Does NOT touch sg.alloc.
 // mirror_view: if true, uses a view into mirror->target_feat at slot0.
@@ -128,4 +128,4 @@ bool build_draft_step(
     return ggml_gallocr_alloc_graph(sg.alloc, sg.gf);
 }
 
-}  // namespace dflash27b
+}  // namespace dflash::common

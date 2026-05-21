@@ -19,7 +19,7 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 
-namespace dflash27b {
+namespace dflash::common {
 namespace flashprefill {
 
 // =============================================================================
@@ -512,6 +512,6 @@ extern "C" void launch_block_select_pascal(
 }
 
 } // namespace flashprefill
-} // namespace dflash27b
+} // namespace dflash::common
 
 #endif // !defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 600 && __CUDA_ARCH__ < 700)

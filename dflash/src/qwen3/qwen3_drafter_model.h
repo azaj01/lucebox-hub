@@ -25,7 +25,7 @@ typedef struct ggml_backend * ggml_backend_t;
 struct ggml_backend_buffer;
 typedef struct ggml_backend_buffer * ggml_backend_buffer_t;
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct Qwen3DrafterLayer {
     ggml_tensor * attn_norm   = nullptr;  // [hidden]
@@ -89,4 +89,4 @@ bool forward_qwen3_drafter_model(
     int n_lookahead,
     std::vector<float> & running_max);
 
-} // namespace dflash27b
+} // namespace dflash::common

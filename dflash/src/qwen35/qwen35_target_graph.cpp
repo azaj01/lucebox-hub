@@ -39,7 +39,7 @@
 #include <cstdlib>
 #include <cstring>
 
-namespace dflash27b {
+namespace dflash::common {
 
 // ─── Local qwen35 constants (from the GGUF, hardcoded for this model) ─
 // These complement the DFLASH27B_* macros in dflash27b.h with qwen35-specific
@@ -1544,4 +1544,4 @@ bool restore_target_cache_chain(const PrefixSnapshot * thick,
 }
 
 
-} // namespace dflash27b
+} // namespace dflash::common

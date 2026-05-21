@@ -5,7 +5,7 @@
 #include "device_placement.h"
 #include <string>
 
-namespace dflash27b {
+namespace dflash::common {
 
 struct Gemma4DaemonArgs {
     const char *     model_path = nullptr;
@@ -17,4 +17,4 @@ struct Gemma4DaemonArgs {
 
 int run_gemma4_daemon(const Gemma4DaemonArgs & args);
 
-}  // namespace dflash27b
+}  // namespace dflash::common

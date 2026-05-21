@@ -42,7 +42,7 @@
 #include <unistd.h>
 #endif
 
-namespace dflash27b {
+namespace dflash::common {
 
 namespace {
 
@@ -250,4 +250,4 @@ void free_qwen3_drafter_model(Qwen3DrafterWeights & w) {
     w.backend = nullptr;
 }
 
-} // namespace dflash27b
+} // namespace dflash::common
