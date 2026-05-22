@@ -593,3 +593,103 @@ class TestConsistency:
                 s_content += delta.get("content", "")
 
         assert ns_content.strip() == s_content.strip()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Stop sequences tests
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestStopSequences:
+    """Test stop sequence support across all API formats."""
+
+    def test_stop_string_chat_completions(self):
+        """OpenAI stop as a single string should truncate output."""
+        body = {
+            "model": MODEL_NAME,
+            "messages": [{"role": "user", "content": "Count from 1 to 20, one number per line."}],
+            "max_tokens": 200,
+            "temperature": 0,
+            "stop": "\n5",
+        }
+        r = post_json("/v1/chat/completions", body)
+        assert r.status_code == 200
+        data = r.json()
+        content = data["choices"][0]["message"]["content"]
+        # Should have numbers before 5 but stop at/before "5"
+        assert "1" in content
+        assert "\n5" not in content
+        assert data["choices"][0]["finish_reason"] == "stop"
+
+    def test_stop_array_chat_completions(self):
+        """OpenAI stop as array should stop at the first match."""
+        body = {
+            "model": MODEL_NAME,
+            "messages": [{"role": "user", "content": "List fruits: apple, banana, cherry, date, elderberry"}],
+            "max_tokens": 100,
+            "temperature": 0,
+            "stop": ["cherry", "date"],
+        }
+        r = post_json("/v1/chat/completions", body)
+        assert r.status_code == 200
+        content = r.json()["choices"][0]["message"]["content"]
+        assert "cherry" not in content
+        assert "date" not in content
+
+    def test_stop_streaming_chat_completions(self):
+        """Stop sequences should work in streaming mode too."""
+        body = {
+            "model": MODEL_NAME,
+            "messages": [{"role": "user", "content": "Count from 1 to 20, one number per line."}],
+            "max_tokens": 200,
+            "temperature": 0,
+            "stop": ["\n5"],
+            "stream": True,
+        }
+        r = post_stream("/v1/chat/completions", body)
+        events = parse_sse_events(r)
+        content = ""
+        finish = None
+        for _, e in events:
+            if e and isinstance(e, dict) and e.get("choices"):
+                delta = e["choices"][0].get("delta", {})
+                content += delta.get("content", "")
+                fr = e["choices"][0].get("finish_reason")
+                if fr:
+                    finish = fr
+        assert "\n5" not in content
+        assert finish == "stop"
+
+    def test_stop_sequences_anthropic(self):
+        """Anthropic stop_sequences field should work."""
+        body = {
+            "model": MODEL_NAME,
+            "messages": [{"role": "user", "content": "Count from 1 to 20, one number per line."}],
+            "max_tokens": 200,
+            "temperature": 0,
+            "stop_sequences": ["\n5"],
+        }
+        r = post_json("/v1/messages", body)
+        assert r.status_code == 200
+        data = r.json()
+        # Find text content
+        text = ""
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                text += block.get("text", "")
+        assert "1" in text
+        assert "\n5" not in text
+
+    def test_stop_no_match(self):
+        """If stop sequences don't match, output should be normal."""
+        body = {
+            "model": MODEL_NAME,
+            "messages": [{"role": "user", "content": "Say hello."}],
+            "max_tokens": 20,
+            "temperature": 0,
+            "stop": ["ZZZZUNLIKELY"],
+        }
+        r = post_json("/v1/chat/completions", body)
+        assert r.status_code == 200
+        content = r.json()["choices"][0]["message"]["content"]
+        # Should produce some output since stop didn't match
+        assert len(content) > 0

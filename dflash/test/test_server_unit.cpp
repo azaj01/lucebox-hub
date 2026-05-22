@@ -464,6 +464,142 @@ static void test_emitter_anthropic_thinking_blocks() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Stop sequences tests
+// ═══════════════════════════════════════════════════════════════════════
+
+static SseEmitter make_emitter_with_stops(ApiFormat fmt, bool thinking,
+                                           const std::vector<std::string> & stops) {
+    return SseEmitter(fmt, "test_id_001", "test-model", 10,
+                      json::array(), nullptr, thinking, stops);
+}
+
+static void test_stop_sequence_basic() {
+    // Stop sequence should truncate content at the match point.
+    auto em = make_emitter_with_stops(ApiFormat::OPENAI_CHAT, false, {"STOP"});
+    em.emit_token("Hello ");
+    em.emit_token("world ");
+    em.emit_token("STOP");
+    em.emit_token(" more text");  // should be ignored
+
+    TEST_ASSERT(em.stop_hit());
+    em.emit_finish(5);
+    // Content should NOT contain "STOP" or "more text"
+    TEST_ASSERT(em.accumulated_text().find("Hello") != std::string::npos);
+    TEST_ASSERT(em.accumulated_text().find("STOP") == std::string::npos);
+    TEST_ASSERT(em.accumulated_text().find("more") == std::string::npos);
+}
+
+static void test_stop_sequence_mid_token() {
+    // Stop sequence may span multiple tokens due to holdback buffering.
+    auto em = make_emitter_with_stops(ApiFormat::OPENAI_CHAT, false, {"END"});
+    em.emit_token("Go ");
+    em.emit_token("to the E");
+    em.emit_token("ND now");
+
+    TEST_ASSERT(em.stop_hit());
+    em.emit_finish(5);
+    TEST_ASSERT(em.accumulated_text().find("Go") != std::string::npos);
+    TEST_ASSERT(em.accumulated_text().find("END") == std::string::npos);
+    TEST_ASSERT(em.accumulated_text().find("now") == std::string::npos);
+}
+
+static void test_stop_sequence_multiple() {
+    // Multiple stop sequences — earliest match wins.
+    auto em = make_emitter_with_stops(ApiFormat::OPENAI_CHAT, false, {"AAA", "BB"});
+    em.emit_token("xBBy");
+
+    TEST_ASSERT(em.stop_hit());
+    em.emit_finish(2);
+    TEST_ASSERT(em.accumulated_text() == "x");
+}
+
+static void test_stop_sequence_no_match() {
+    // No stop sequence hit — normal operation.
+    auto em = make_emitter_with_stops(ApiFormat::OPENAI_CHAT, false, {"NOMATCH"});
+    em.emit_token("Hello world this is a long text");
+    em.emit_finish(10);
+
+    TEST_ASSERT(!em.stop_hit());
+    TEST_ASSERT(em.accumulated_text().find("Hello") != std::string::npos);
+}
+
+static void test_stop_sequence_empty_list() {
+    // Empty stop list — no effect.
+    auto em = make_emitter_with_stops(ApiFormat::OPENAI_CHAT, false, {});
+    em.emit_token("Hello STOP world");
+    em.emit_finish(5);
+
+    TEST_ASSERT(!em.stop_hit());
+    TEST_ASSERT(em.accumulated_text().find("STOP") != std::string::npos);
+}
+
+static void test_stop_sequence_finish_reason() {
+    // finish_reason should be "stop" when stop sequence hit.
+    auto em = make_emitter_with_stops(ApiFormat::OPENAI_CHAT, false, {"END"});
+    em.emit_token("content END more");
+
+    TEST_ASSERT(em.stop_hit());
+    em.emit_finish(3);
+    TEST_ASSERT(em.finish_reason() == "stop");
+}
+
+static void test_stop_sequence_streaming_output() {
+    // Streaming: verify the [DONE] is still emitted after stop.
+    auto em = make_emitter_with_stops(ApiFormat::OPENAI_CHAT, false, {"HALT"});
+    auto start = em.emit_start();
+    em.emit_token("some text HALT rest");
+
+    TEST_ASSERT(em.stop_hit());
+    auto finish = em.emit_finish(5);
+    std::string all = concat(finish);
+    TEST_ASSERT(all.find("[DONE]") != std::string::npos);
+    TEST_ASSERT(all.find("\"finish_reason\":\"stop\"") != std::string::npos);
+}
+
+static void test_stop_sequence_anthropic_format() {
+    // Anthropic format should emit end_turn stop_reason.
+    auto em = make_emitter_with_stops(ApiFormat::ANTHROPIC, false, {"DONE"});
+    em.emit_start();
+    em.emit_token("This is content DONE rest");
+
+    TEST_ASSERT(em.stop_hit());
+    auto finish = em.emit_finish(5);
+    std::string all = concat(finish);
+    TEST_ASSERT(all.find("end_turn") != std::string::npos);
+    TEST_ASSERT(all.find("message_stop") != std::string::npos);
+}
+
+static void test_stop_sequence_in_reasoning_mode() {
+    // Stop sequence in reasoning mode should still stop.
+    auto em = make_emitter_with_stops(ApiFormat::OPENAI_CHAT, true, {"CUTOFF"});
+    em.emit_token("Thinking deeply about this CUTOFF answer");
+
+    TEST_ASSERT(em.stop_hit());
+    em.emit_finish(5);
+    TEST_ASSERT(em.reasoning_text().find("Thinking") != std::string::npos);
+    TEST_ASSERT(em.reasoning_text().find("CUTOFF") == std::string::npos);
+}
+
+static void test_stop_sequence_holdback_extends() {
+    // With a long stop sequence, holdback buffer should extend to prevent
+    // emitting text that's part of a stop sequence.
+    auto em = make_emitter_with_stops(ApiFormat::OPENAI_CHAT, false,
+                                       {"LONGSTOPSEQUENCE"});
+    // Feed text token by token — the holdback should prevent premature emission
+    em.emit_token("prefix ");
+    em.emit_token("LONG");
+    em.emit_token("STOP");
+    em.emit_token("SEQUENCE");
+    em.emit_token(" suffix");
+
+    TEST_ASSERT(em.stop_hit());
+    em.emit_finish(10);
+    TEST_ASSERT(em.accumulated_text().find("prefix") != std::string::npos);
+    TEST_ASSERT(em.accumulated_text().find("LONGSTOPSEQUENCE") == std::string::npos);
+    TEST_ASSERT(em.accumulated_text().find("suffix") == std::string::npos);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Prefix cache hash tests (model-free)
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -956,6 +1092,18 @@ int main() {
     RUN_TEST(test_emitter_streaming_openai_has_done);
     RUN_TEST(test_emitter_nonstreaming_accumulates);
     RUN_TEST(test_emitter_anthropic_thinking_blocks);
+
+    std::fprintf(stderr, "\n── Stop sequences ──\n");
+    RUN_TEST(test_stop_sequence_basic);
+    RUN_TEST(test_stop_sequence_mid_token);
+    RUN_TEST(test_stop_sequence_multiple);
+    RUN_TEST(test_stop_sequence_no_match);
+    RUN_TEST(test_stop_sequence_empty_list);
+    RUN_TEST(test_stop_sequence_finish_reason);
+    RUN_TEST(test_stop_sequence_streaming_output);
+    RUN_TEST(test_stop_sequence_anthropic_format);
+    RUN_TEST(test_stop_sequence_in_reasoning_mode);
+    RUN_TEST(test_stop_sequence_holdback_extends);
 
     std::fprintf(stderr, "\n── Prefix cache (hash) ──\n");
     RUN_TEST(test_hash_prefix_deterministic);

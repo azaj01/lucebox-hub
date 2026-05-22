@@ -84,6 +84,8 @@ struct ParsedRequest {
     // Thinking/reasoning state
     bool                      thinking_enabled = true;
     bool                      started_in_thinking = false;
+    // Stop sequences (OpenAI "stop" + Anthropic "stop_sequences")
+    std::vector<std::string>  stop_sequences;
 };
 
 // ─── HTTP server ────────────────────────────────────────────────────────

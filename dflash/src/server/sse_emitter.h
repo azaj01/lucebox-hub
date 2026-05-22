@@ -40,7 +40,8 @@ public:
                int prompt_tokens,
                const json & tools,
                ToolMemory * tool_memory,
-               bool started_in_thinking);
+               bool started_in_thinking,
+               const std::vector<std::string> & stop_sequences = {});
 
     // Emit the initial SSE events (role delta, message_start, etc.)
     // Returns the formatted SSE strings to send.
@@ -55,6 +56,9 @@ public:
 
     // Get the finish_reason for non-streaming responses.
     std::string finish_reason() const;
+
+    // Check if a stop sequence was hit (signals caller to stop generation).
+    bool stop_hit() const { return stop_hit_; }
 
     // Get accumulated content (for non-streaming).
     const std::string & accumulated_text() const { return accumulated_content_; }
@@ -100,12 +104,17 @@ private:
     // Strip leading <think> tag from reasoning (ds4 pattern).
     bool         checked_think_prefix_ = false;
 
+    // Stop sequences support
+    std::vector<std::string> stop_sequences_;
+    size_t       stop_holdback_ = 0;  // max length of any stop sequence
+    bool         stop_hit_ = false;
+
     int64_t      created_at_;
 
     // Responses API IDs
     std::string  msg_item_id_;
 
-    static constexpr size_t HOLDBACK = 12;  // max(len("<tool_call>"), len("</think>"), len("<think>"))
+    static constexpr size_t BASE_HOLDBACK = 12;  // max(len("<tool_call>"), len("</think>"), len("<think>"))
 };
 
 }  // namespace dflash::common

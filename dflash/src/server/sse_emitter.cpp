@@ -3,6 +3,7 @@
 #include "sse_emitter.h"
 #include "utf8_utils.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -36,7 +37,8 @@ SseEmitter::SseEmitter(ApiFormat format,
                        int prompt_tokens,
                        const json & tools,
                        ToolMemory * tool_memory,
-                       bool started_in_thinking)
+                       bool started_in_thinking,
+                       const std::vector<std::string> & stop_sequences)
     : format_(format)
     , request_id_(request_id)
     , model_name_(model_name)
@@ -45,9 +47,15 @@ SseEmitter::SseEmitter(ApiFormat format,
     , tool_memory_(tool_memory)
     , mode_(started_in_thinking ? StreamMode::REASONING : StreamMode::CONTENT)
     , active_kind_(started_in_thinking ? "thinking" : "text")
+    , stop_sequences_(stop_sequences)
     , created_at_(unix_timestamp())
     , msg_item_id_(gen_item_id())
-{}
+{
+    // Compute stop holdback: max length of any stop sequence
+    for (const auto & s : stop_sequences_) {
+        if (s.size() > stop_holdback_) stop_holdback_ = s.size();
+    }
+}
 
 // ─── SSE formatting helpers ─────────────────────────────────────────────
 
@@ -165,11 +173,50 @@ std::vector<std::string> SseEmitter::emit_start() {
 // ─── emit_token ─────────────────────────────────────────────────────────
 
 std::vector<std::string> SseEmitter::emit_token(const std::string & raw_piece) {
+    if (stop_hit_) return {};  // already stopped
+
     // Sanitize input to prevent json::dump() from throwing on invalid UTF-8.
     std::string piece = utf8_sanitize(raw_piece);
     std::vector<std::string> out;
     accumulated_raw_ += piece;
     window_ += piece;
+
+    // Stop sequence detection (not in tool_buffer mode, matching Python logic).
+    if (!stop_sequences_.empty() && mode_ != StreamMode::TOOL_BUFFER) {
+        size_t best = std::string::npos;
+        for (const auto & seq : stop_sequences_) {
+            size_t pos = window_.find(seq);
+            if (pos != std::string::npos && (best == std::string::npos || pos < best)) {
+                best = pos;
+            }
+        }
+        if (best != std::string::npos) {
+            // Emit everything before the stop sequence
+            std::string pre = window_.substr(0, best);
+            if (!pre.empty()) {
+                if (mode_ == StreamMode::REASONING) {
+                    reasoning_text_ += pre;
+                    switch (format_) {
+                    case ApiFormat::OPENAI_CHAT:
+                        out.push_back(format_openai_delta({{"reasoning_content", pre}}));
+                        break;
+                    case ApiFormat::ANTHROPIC:
+                        out.push_back(sse_event("content_block_delta",
+                            json({{"type", "content_block_delta"}, {"index", block_index_},
+                                  {"delta", {{"type", "thinking_delta"}, {"thinking", pre}}}}).dump()));
+                        break;
+                    default: break;
+                    }
+                } else {
+                    accumulated_content_ += pre;
+                    emit_content_delta(out, pre);
+                }
+            }
+            window_.clear();
+            stop_hit_ = true;
+            return out;
+        }
+    }
 
     // State machine loop — processes the window
     while (true) {
@@ -233,8 +280,8 @@ std::vector<std::string> SseEmitter::emit_token(const std::string & raw_piece) {
                 continue;
             }
             // No close tag yet — emit safe prefix if window is large enough
-            if (window_.size() > HOLDBACK) {
-                size_t cut = utf8_safe_len(window_, window_.size() - HOLDBACK);
+            if (window_.size() > std::max(BASE_HOLDBACK, stop_holdback_)) {
+                size_t cut = utf8_safe_len(window_, window_.size() - std::max(BASE_HOLDBACK, stop_holdback_));
                 if (cut == 0) break;  // not enough complete chars yet
                 std::string safe = window_.substr(0, cut);
                 reasoning_text_ += safe;
@@ -305,8 +352,8 @@ std::vector<std::string> SseEmitter::emit_token(const std::string & raw_piece) {
         }
 
         // No tags found — emit safe prefix
-        if (window_.size() > HOLDBACK) {
-            size_t cut = utf8_safe_len(window_, window_.size() - HOLDBACK);
+        if (window_.size() > std::max(BASE_HOLDBACK, stop_holdback_)) {
+            size_t cut = utf8_safe_len(window_, window_.size() - std::max(BASE_HOLDBACK, stop_holdback_));
             if (cut > 0) {
                 std::string safe = window_.substr(0, cut);
                 accumulated_content_ += safe;
@@ -528,7 +575,8 @@ std::vector<std::string> SseEmitter::emit_finish(int completion_tokens) {
         }
         // stop_reason reflects the model's actual finish: "tool_use" when
         // any tool calls were emitted (downstream SDKs pivot on this to feed
-        // tool_result back), else "end_turn".
+        // tool_result back), else "end_turn". Stop-sequence hits also report
+        // "end_turn" (Anthropic has no dedicated reason for that case).
         const char * stop_reason = tool_calls_.empty() ? "end_turn" : "tool_use";
         json msg_delta = {
             {"type", "message_delta"},
@@ -611,7 +659,8 @@ std::vector<std::string> SseEmitter::emit_finish(int completion_tokens) {
 }
 
 std::string SseEmitter::finish_reason() const {
-    return tool_calls_.empty() ? "stop" : "tool_calls";
+    if (!tool_calls_.empty()) return "tool_calls";
+    return "stop";
 }
 
 }  // namespace dflash::common
