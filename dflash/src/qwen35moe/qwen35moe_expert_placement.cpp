@@ -167,4 +167,86 @@ bool Qwen35MoeExpertPlacement::build_from_stats(const Qwen35MoeRoutingStats & st
     return true;
 }
 
+bool Qwen35MoeExpertPlacement::build_from_stats_with_layer_bytes(
+    const Qwen35MoeRoutingStats & stats,
+    const std::vector<uint64_t> & layer_expert_bytes,
+    uint64_t total_hot_budget_bytes,
+    int min_hot_per_layer,
+    Qwen35MoeExpertPlacement & out,
+    std::string * err) {
+    if (stats.empty() || stats.n_layer <= 0 || stats.n_expert <= 0) {
+        if (err) *err = "stats not initialized";
+        return false;
+    }
+    if ((int)layer_expert_bytes.size() != stats.n_layer) {
+        if (err) *err = "layer_expert_bytes size mismatch";
+        return false;
+    }
+    if (min_hot_per_layer < 0) min_hot_per_layer = 0;
+    if (total_hot_budget_bytes == 0) {
+        if (err) *err = "total_hot_budget_bytes must be > 0";
+        return false;
+    }
+
+    const int per_layer_floor = std::min(min_hot_per_layer, stats.n_expert);
+    uint64_t floor_bytes = 0;
+    for (int il = 0; il < stats.n_layer; ++il) {
+        floor_bytes += (uint64_t)per_layer_floor * layer_expert_bytes[(size_t)il];
+    }
+    if (floor_bytes > total_hot_budget_bytes) {
+        if (err) *err = "min_hot_per_layer exceeds byte budget";
+        return false;
+    }
+
+    Qwen35MoeExpertPlacement tmp;
+    tmp.n_layer = stats.n_layer;
+    tmp.n_expert = stats.n_expert;
+    tmp.n_expert_used = stats.n_expert_used;
+    tmp.hot_counts.assign((size_t)tmp.n_layer, per_layer_floor);
+
+    std::vector<std::vector<int>> ranked((size_t)tmp.n_layer);
+    for (int il = 0; il < tmp.n_layer; ++il) {
+        ranked[(size_t)il] = stats.ranked_experts(il);
+    }
+
+    uint64_t remaining = total_hot_budget_bytes - floor_bytes;
+    while (true) {
+        int best_layer = -1;
+        double best_value = -1.0;
+        uint64_t best_gain = 0;
+        for (int il = 0; il < tmp.n_layer; ++il) {
+            const int cur_hot = tmp.hot_counts[(size_t)il];
+            if (cur_hot >= tmp.n_expert) continue;
+            const uint64_t bytes = layer_expert_bytes[(size_t)il];
+            if (bytes == 0 || bytes > remaining) continue;
+            const int next_expert = ranked[(size_t)il][(size_t)cur_hot];
+            const uint64_t gain = stats.count(il, next_expert);
+            const double value = (double)gain / (double)bytes;
+            if (best_layer < 0 || value > best_value ||
+                (value == best_value && gain > best_gain)) {
+                best_layer = il;
+                best_value = value;
+                best_gain = gain;
+            }
+        }
+        if (best_layer < 0) break;
+        tmp.hot_counts[(size_t)best_layer]++;
+        remaining -= layer_expert_bytes[(size_t)best_layer];
+    }
+
+    tmp.total_hot = std::accumulate(tmp.hot_counts.begin(), tmp.hot_counts.end(), 0);
+    tmp.hot_expert_ids.resize((size_t)tmp.n_layer);
+    for (int il = 0; il < tmp.n_layer; ++il) {
+        const int hot_n = tmp.hot_counts[(size_t)il];
+        auto & hot = tmp.hot_expert_ids[(size_t)il];
+        hot.reserve((size_t)hot_n);
+        for (int i = 0; i < hot_n; ++i) {
+            hot.push_back((int32_t)ranked[(size_t)il][(size_t)i]);
+        }
+    }
+
+    out = std::move(tmp);
+    return true;
+}
+
 }  // namespace dflash::common

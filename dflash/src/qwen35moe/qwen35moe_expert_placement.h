@@ -35,6 +35,14 @@ struct Qwen35MoeExpertPlacement {
                                  int min_hot_per_layer,
                                  Qwen35MoeExpertPlacement & out,
                                  std::string * err = nullptr);
+
+    static bool build_from_stats_with_layer_bytes(
+        const Qwen35MoeRoutingStats & stats,
+        const std::vector<uint64_t> & layer_expert_bytes,
+        uint64_t total_hot_budget_bytes,
+        int min_hot_per_layer,
+        Qwen35MoeExpertPlacement & out,
+        std::string * err = nullptr);
 };
 
 }  // namespace dflash::common
