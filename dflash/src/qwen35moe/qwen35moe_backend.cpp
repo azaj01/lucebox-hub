@@ -77,7 +77,7 @@ bool Qwen35MoeBackend::load_target_model(ggml_backend_t backend, TargetWeights &
                 placement_path);
     if (total_cold > 0) {
         hybrid_mode_ = true;
-        cfg_.draft_path = nullptr;  // hybrid mode falls back to AR-only
+        cfg_.draft_path = nullptr;  // spec decode hurts: 6 tok/s vs 20 tok/s AR (low acceptance rate ~15%)
         std::printf("[qwen35moe] hybrid decode path active (%d cold experts)\n", total_cold);
     } else {
         std::printf("[qwen35moe] all experts hot — using fused all-GPU decode path\n");
