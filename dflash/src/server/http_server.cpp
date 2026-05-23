@@ -417,6 +417,19 @@ bool HttpServer::route_request(int fd, const HttpRequest & hr) {
             req.sampler.seed = body["seed"].get<uint64_t>();
         }
 
+        // OpenAI-style additive penalties.
+        req.sampler.freq_pen = body.value("frequency_penalty", 0.0f);
+        req.sampler.pres_pen = body.value("presence_penalty", 0.0f);
+
+        // HuggingFace-style multiplicative repetition penalty (also used by
+        // vLLM, llama.cpp, etc.). Accepts both "repetition_penalty" and
+        // the shorter "rep_pen" for daemon compatibility.
+        req.sampler.rep_pen = body.value("repetition_penalty",
+                              body.value("rep_pen", 1.0f));
+        if (body.contains("rep_window")) {
+            req.sampler.rep_window = body["rep_window"].get<int>();
+        }
+
         // Tools.
         if (body.contains("tools")) {
             req.tools = body["tools"];
@@ -736,7 +749,7 @@ void HttpServer::worker_loop() {
         gen_req.prompt = effective_prompt;
         gen_req.n_gen = req.max_output;
         gen_req.sampler = req.sampler;
-        gen_req.do_sample = req.sampler.temp > 0.0f;
+        gen_req.do_sample = req.sampler.needs_logit_processing();
         gen_req.stream = false;  // we handle streaming via on_token callback
 
         // Tool call hint generation: pre-tokenize predictable structural tokens
