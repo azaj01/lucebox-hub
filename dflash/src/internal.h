@@ -264,6 +264,14 @@ struct DraftWeights {
     int swa_window = 0;  // sliding window size (0 = disabled)
     float rope_theta = 0.0f;  // RoPE frequency base (must come from GGUF)
 
+    // YaRN rope scaling (populated by loader; 0 = disabled / plain RoPE).
+    float rope_freq_scale = 1.0f;   // 1/factor (e.g. 1/64 for factor=64)
+    float rope_ext_factor = 0.0f;   // >0 enables YaRN interpolation
+    float rope_attn_factor = 1.0f;
+    float rope_beta_fast  = 0.0f;
+    float rope_beta_slow  = 0.0f;
+    int   rope_n_ctx_orig = 0;      // original_max_position_embeddings
+
     // DFlash draft-specific config (populated by loader or set by caller).
     int block_size      = DFLASH27B_DRAFT_BLOCK_SIZE;       // tokens per draft step (16 or 10)
     int n_target_layers = DFLASH27B_DRAFT_N_TARGET_LAYERS;  // captured target layers (5)

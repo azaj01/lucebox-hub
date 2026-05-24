@@ -119,6 +119,29 @@ bool Qwen35Backend::init() {
             dw_.rope_theta = w_.rope_theta;
         }
 
+        // Apply YaRN rope scaling if the GGUF didn't provide it.
+        // The 35B draft (8 layers, 4 KV heads) requires YaRN (factor=64, beta_fast=32, beta_slow=1, orig_ctx=4096).
+        // The 27B draft (5 layers, 8 KV heads) uses plain RoPE (no scaling).
+        if (dw_.rope_ext_factor == 0.0f) {
+            float yarn_factor = cfg_.draft_yarn_factor;
+            // Auto-detect: 35B draft has 8 layers and hidden=2048
+            if (yarn_factor <= 1.0f && dw_.n_layer == 8 && dw_.n_embd == 2048) {
+                yarn_factor = 64.0f;
+                std::printf("[draft]  auto-detected 35B draft — applying YaRN defaults\n");
+            }
+            if (yarn_factor > 1.0f) {
+                dw_.rope_freq_scale  = 1.0f / yarn_factor;
+                dw_.rope_ext_factor  = 1.0f;
+                dw_.rope_attn_factor = 1.0f;
+                dw_.rope_beta_fast   = cfg_.draft_yarn_beta_fast;
+                dw_.rope_beta_slow   = cfg_.draft_yarn_beta_slow;
+                dw_.rope_n_ctx_orig  = cfg_.draft_yarn_orig_ctx;
+                std::printf("[draft]  YaRN: factor=%.1f freq_scale=%.6f beta_fast=%.1f beta_slow=%.1f orig_ctx=%d\n",
+                            yarn_factor, dw_.rope_freq_scale,
+                            dw_.rope_beta_fast, dw_.rope_beta_slow, dw_.rope_n_ctx_orig);
+            }
+        }
+
         if (cfg_.draft_swa_window > 0) {
             dw_.swa_window = cfg_.draft_swa_window;
             for (int il = 0; il < dw_.n_layer - 1; il++)
@@ -229,6 +252,17 @@ bool Qwen35Backend::unpark(const std::string & what) {
             if (!draft_ok) {
                 std::fprintf(stderr, "[unpark] draft: %s\n", dflash27b_last_error());
                 return false;
+            }
+            // Re-apply rope overrides after reload.
+            if (dw_.rope_theta != w_.rope_theta && w_.rope_theta > 0.0f)
+                dw_.rope_theta = w_.rope_theta;
+            if (dw_.rope_ext_factor == 0.0f && dw_.n_layer == 8 && dw_.n_embd == 2048) {
+                float yf = cfg_.draft_yarn_factor > 1.0f ? cfg_.draft_yarn_factor : 64.0f;
+                dw_.rope_freq_scale = 1.0f / yf;
+                dw_.rope_ext_factor = 1.0f; dw_.rope_attn_factor = 1.0f;
+                dw_.rope_beta_fast = cfg_.draft_yarn_beta_fast;
+                dw_.rope_beta_slow = cfg_.draft_yarn_beta_slow;
+                dw_.rope_n_ctx_orig = cfg_.draft_yarn_orig_ctx;
             }
             if (cfg_.draft_swa_window > 0) {
                 dw_.swa_window = cfg_.draft_swa_window;
