@@ -71,6 +71,7 @@ bool Qwen35MoeBackend::load_target_model(ggml_backend_t backend, TargetWeights &
     // If all experts fit on GPU, reload with experts included
     if (placement.total_hot >= out.n_layer * out.n_expert) {
         std::printf("[qwen35moe] all experts fit in VRAM, loading fully to GPU\n");
+        std::fflush(stdout);
         free_target_weights(out);
         return load_target_gguf(cfg_.target_path, backend, out);
     }
@@ -492,6 +493,10 @@ GenerateResult Qwen35MoeBackend::generate(const GenerateRequest & req,
     std::vector<StepGraph> cached_prefn((size_t)n_layer);
     std::vector<bool> prefn_built((size_t)n_layer, false);
     uint64_t build_us_total = 0, compute_us_total = 0, readback_us_total = 0, ffn_us_total = 0;
+    uint64_t prefill_build_us = 0, prefill_compute_us = 0, prefill_readback_us = 0, prefill_ffn_us = 0;
+    uint64_t decode_build_us = 0, decode_compute_us = 0, decode_readback_us = 0, decode_ffn_us = 0;
+    uint64_t embed_us_total = 0, logits_us_total = 0;
+    Qwen35MoeHybridFfnTelemetry ffn_tel_accum{};
 
     auto cleanup_graphs = [&]() {
         step_graph_destroy(layer_sg);
@@ -550,11 +555,21 @@ GenerateResult Qwen35MoeBackend::generate(const GenerateRequest & req,
 
             auto & storage = target_weights().moe_hybrid->layers[(size_t)il];
             const auto & L = target_weights().layers[(size_t)il];
+            Qwen35MoeHybridFfnTelemetry ffn_tel{};
             if (!eval_qwen35moe_hybrid_ffn_single(
                     target_backend(), target_weights(), L, storage, cpu_be,
                     post_buf.data(), selected.data(), weights_buf.data(),
-                    (int)selected.size(), ffn_out, nullptr, nullptr)) {
+                    (int)selected.size(), ffn_out,
+                    hybrid_telemetry_ ? &ffn_tel : nullptr, nullptr)) {
                 return false;
+            }
+            if (hybrid_telemetry_) {
+                ffn_tel_accum.hot_us += ffn_tel.hot_us;
+                ffn_tel_accum.cold_us += ffn_tel.cold_us;
+                ffn_tel_accum.partition_us += ffn_tel.partition_us;
+                ffn_tel_accum.combine_us += ffn_tel.combine_us;
+                ffn_tel_accum.hot_selected += ffn_tel.hot_selected;
+                ffn_tel_accum.cold_selected += ffn_tel.cold_selected;
             }
             const auto t4 = HybridClock::now();
             ffn_us_total += elapsed_us(t3, t4);
@@ -714,13 +729,23 @@ GenerateResult Qwen35MoeBackend::generate(const GenerateRequest & req,
                 const int32_t * tok_sel = chunk_selected.data() + (size_t)i * (size_t)n_expert_used;
                 const float * tok_wt = chunk_weights.data() + (size_t)i * (size_t)n_expert_used;
 
+                Qwen35MoeHybridFfnTelemetry ffn_tel{};
                 if (!eval_qwen35moe_hybrid_ffn_single(
                         target_backend(), target_weights(), L, storage, cpu_be,
-                        tok_post, tok_sel, tok_wt, n_expert_used, ffn_out, nullptr, nullptr)) {
+                        tok_post, tok_sel, tok_wt, n_expert_used, ffn_out,
+                        hybrid_telemetry_ ? &ffn_tel : nullptr, nullptr)) {
                     result.error = "prefill_ffn";
                     step_graph_destroy(prefill_sg);
                     cleanup_graphs();
                     return result;
+                }
+                if (hybrid_telemetry_) {
+                    ffn_tel_accum.hot_us += ffn_tel.hot_us;
+                    ffn_tel_accum.cold_us += ffn_tel.cold_us;
+                    ffn_tel_accum.partition_us += ffn_tel.partition_us;
+                    ffn_tel_accum.combine_us += ffn_tel.combine_us;
+                    ffn_tel_accum.hot_selected += ffn_tel.hot_selected;
+                    ffn_tel_accum.cold_selected += ffn_tel.cold_selected;
                 }
 
                 // Combine: embed_all[chunk_start+i] = ffn_out + residual for next layer
@@ -764,6 +789,13 @@ GenerateResult Qwen35MoeBackend::generate(const GenerateRequest & req,
     // Copy last token's output to act_cur for decode
     std::memcpy(act_cur.data(), embed_all.data() + (size_t)(prompt_len - 1) * (size_t)hidden,
                 sizeof(float) * (size_t)hidden);
+
+    // Save prefill counters
+    prefill_build_us = build_us_total;
+    prefill_compute_us = compute_us_total;
+    prefill_readback_us = readback_us_total;
+    prefill_ffn_us = ffn_us_total;
+    build_us_total = 0; compute_us_total = 0; readback_us_total = 0; ffn_us_total = 0;
 
     int committed = prompt_len;
     target_cache().cur_pos = committed;
@@ -836,22 +868,26 @@ GenerateResult Qwen35MoeBackend::generate(const GenerateRequest & req,
 
                 // Generate remaining tokens
                 for (int step = 1; step < req.n_gen; ++step) {
+                    const auto t_emb0 = HybridClock::now();
                     int32_t tok = result.tokens.back();
                     if (!target_weights().embedder.embed(&tok, 1, act_cur.data())) {
                         result.error = "decode_embed";
                         cleanup_graphs();
                         return result;
                     }
+                    embed_us_total += elapsed_us(t_emb0, HybridClock::now());
                     if (!process_one_token(committed)) {
                         result.error = "decode";
                         cleanup_graphs();
                         return result;
                     }
+                    const auto t_log0 = HybridClock::now();
                     if (!compute_logits()) {
                         result.error = "decode_logits";
                         cleanup_graphs();
                         return result;
                     }
+                    logits_us_total += elapsed_us(t_log0, HybridClock::now());
                     int32_t next_tok;
                     if (sampler_config().temp > 0) {
                         next_tok = sample_logits(logits_buf.data(), vocab, sampler_config(),
@@ -880,9 +916,52 @@ GenerateResult Qwen35MoeBackend::generate(const GenerateRequest & req,
         cleanup_graphs();
     }
     if (hybrid_telemetry_) {
-        std::printf("[qwen35moe] perf breakdown: build=%.1fms compute=%.1fms readback=%.1fms ffn=%.1fms\n",
-                    build_us_total / 1000.0, compute_us_total / 1000.0,
-                    readback_us_total / 1000.0, ffn_us_total / 1000.0);
+        decode_build_us = build_us_total;
+        decode_compute_us = compute_us_total;
+        decode_readback_us = readback_us_total;
+        decode_ffn_us = ffn_us_total;
+        const int n_decode_toks = (int)result.tokens.size();
+        std::printf("[qwen35moe] === PREFILL ANALYSIS (prompt_len=%d, chunk=%d) ===\n", prompt_len, prefill_chunk);
+        std::printf("  prefill_total=%.1fms (%.1f tok/s)\n",
+                    result.prefill_s * 1000.0, prompt_len / result.prefill_s);
+        std::printf("  build=%.1fms compute=%.1fms readback=%.1fms ffn=%.1fms\n",
+                    prefill_build_us / 1000.0, prefill_compute_us / 1000.0,
+                    prefill_readback_us / 1000.0, prefill_ffn_us / 1000.0);
+        const double prefill_total_us = (double)(prefill_build_us + prefill_compute_us + prefill_readback_us + prefill_ffn_us);
+        if (prefill_total_us > 0) {
+            std::printf("  pct: build=%.1f%% compute=%.1f%% readback=%.1f%% ffn=%.1f%%\n",
+                        100.0 * prefill_build_us / prefill_total_us,
+                        100.0 * prefill_compute_us / prefill_total_us,
+                        100.0 * prefill_readback_us / prefill_total_us,
+                        100.0 * prefill_ffn_us / prefill_total_us);
+        }
+        std::printf("[qwen35moe] === DECODE ANALYSIS (n_tokens=%d) ===\n", n_decode_toks);
+        if (result.decode_s > 0) {
+            std::printf("  decode_total=%.1fms (%.2f tok/s)\n",
+                        result.decode_s * 1000.0, n_decode_toks / result.decode_s);
+        }
+        std::printf("  build=%.1fms compute=%.1fms readback=%.1fms ffn=%.1fms\n",
+                    decode_build_us / 1000.0, decode_compute_us / 1000.0,
+                    decode_readback_us / 1000.0, decode_ffn_us / 1000.0);
+        std::printf("  embed=%.1fms logits=%.1fms\n",
+                    embed_us_total / 1000.0, logits_us_total / 1000.0);
+        const double decode_total_us = (double)(decode_build_us + decode_compute_us + decode_readback_us + decode_ffn_us + embed_us_total + logits_us_total);
+        if (decode_total_us > 0 && n_decode_toks > 0) {
+            std::printf("  per-token: build=%.2fms compute=%.2fms readback=%.2fms ffn=%.2fms embed=%.2fms logits=%.2fms\n",
+                        decode_build_us / 1000.0 / n_decode_toks,
+                        decode_compute_us / 1000.0 / n_decode_toks,
+                        decode_readback_us / 1000.0 / n_decode_toks,
+                        decode_ffn_us / 1000.0 / n_decode_toks,
+                        embed_us_total / 1000.0 / n_decode_toks,
+                        logits_us_total / 1000.0 / n_decode_toks);
+        }
+        std::printf("[qwen35moe] === FFN BREAKDOWN (total calls) ===\n");
+        std::printf("  hot_gpu=%.1fms cold_cpu=%.1fms partition=%.1fms combine=%.1fms\n",
+                    ffn_tel_accum.hot_us / 1000.0, ffn_tel_accum.cold_us / 1000.0,
+                    ffn_tel_accum.partition_us / 1000.0, ffn_tel_accum.combine_us / 1000.0);
+        std::printf("  hot_expert_selections=%d cold_expert_selections=%d\n",
+                    ffn_tel_accum.hot_selected, ffn_tel_accum.cold_selected);
+        std::fflush(stdout);
     }
     result.ok = true;
     if (result.ok) maybe_post_request_swap();
@@ -1343,6 +1422,16 @@ bool Qwen35MoeBackend::load_dynamic_placement(const char * hotness_path,
         expert_budget = total_expert_bytes;
     }
 
+    // Allow manual budget cap via env var (for profiling/testing hybrid mode)
+    if (const char * cap_env = std::getenv("DFLASH_EXPERT_BUDGET_MB")) {
+        uint64_t cap_bytes = (uint64_t)std::atoi(cap_env) * 1024ULL * 1024ULL;
+        if (cap_bytes > 0 && cap_bytes < expert_budget) {
+            std::printf("[qwen35moe] capping expert budget from %.2f GiB to %d MB (DFLASH_EXPERT_BUDGET_MB)\n",
+                        expert_budget / 1024.0 / 1024.0 / 1024.0, std::atoi(cap_env));
+            expert_budget = cap_bytes;
+        }
+    }
+
     std::printf("[qwen35moe] dynamic placement: gpu_total=%.2f GiB, core=%.2f GiB, "
                 "kv_cache=%.2f GiB (ctx=%d), warm=%.0f MB, safety=%.0f MB, "
                 "expert_budget=%.2f GiB (of %.2f GiB total experts)\n",
@@ -1370,6 +1459,7 @@ bool Qwen35MoeBackend::load_dynamic_placement(const char * hotness_path,
 
     std::printf("[qwen35moe] dynamic placement result: %d hot experts, %d cold experts\n",
                 out.total_hot, w.n_layer * w.n_expert - out.total_hot);
+    std::fflush(stdout);
     return true;
 }
 
