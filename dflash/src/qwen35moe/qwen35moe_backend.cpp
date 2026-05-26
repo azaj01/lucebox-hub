@@ -319,16 +319,24 @@ bool Qwen35MoeBackend::run_ar_decode_path(int committed, int n_gen,
     }
 
     StepGraph layer_sg;
-    std::vector<float> residual_buf((size_t)hidden);
-    std::vector<float> post_buf((size_t)hidden);
-    std::vector<float> ffn_out((size_t)hidden);
     std::vector<int32_t> selected((size_t)target_weights().n_expert_used);
     std::vector<float> weights_buf((size_t)target_weights().n_expert_used);
     ggml_backend_t cpu_be = target_weights().moe_hybrid->cpu_backend;
 
+    // Initialize GPU-resident state: persistent act_cur + combine graph on GPU
+    GpuResidentState gpu_state;
+    if (!init_gpu_resident_state(gpu_state, target_backend(), hidden)) {
+        return false;
+    }
+
     for (int step = 1; step < n_gen; ++step) {
         int32_t tok = out_tokens.back();
-        if (!target_weights().embedder.embed(&tok, 1, act_cur.data())) return false;
+        // Embed token to host, then upload to GPU-resident act_cur once
+        if (!target_weights().embedder.embed(&tok, 1, act_cur.data())) {
+            gpu_state.destroy();
+            return false;
+        }
+        ggml_backend_tensor_set(gpu_state.act_cur, act_cur.data(), 0, sizeof(float) * (size_t)hidden);
 
         for (int il = 0; il < target_weights().n_layer; ++il) {
             const auto prefn_t0 = HybridClock::now();
@@ -337,9 +345,11 @@ bool Qwen35MoeBackend::run_ar_decode_path(int committed, int n_gen,
                                         il, committed, /*n_tokens=*/1,
                                         /*with_mask=*/false, /*fa_window=*/0, cfg_.kq_stride_pad)) {
                 step_graph_destroy(layer_sg);
+                gpu_state.destroy();
                 return false;
             }
-            ggml_backend_tensor_set(layer_sg.inp_embed, act_cur.data(), 0, sizeof(float) * (size_t)hidden);
+            // GPU→GPU: copy persistent act_cur to pre-FFN graph input (no PCIe!)
+            ggml_backend_tensor_copy(gpu_state.act_cur, layer_sg.inp_embed);
             if (layer_sg.positions) {
                 int32_t pos4[4] = {committed, committed, committed, 0};
                 ggml_backend_tensor_set(layer_sg.positions, pos4, 0, sizeof(pos4));
@@ -347,18 +357,17 @@ bool Qwen35MoeBackend::run_ar_decode_path(int committed, int n_gen,
             auto st = ggml_backend_graph_compute(target_backend(), layer_sg.gf);
             if (st != GGML_STATUS_SUCCESS) {
                 step_graph_destroy(layer_sg);
+                gpu_state.destroy();
                 return false;
             }
 
-            // Read pre-FFN outputs: residual, post-norm (FFN input), router selections
-            ggml_backend_tensor_get(layer_sg.ffn_residual, residual_buf.data(), 0, sizeof(float) * (size_t)hidden);
-            ggml_backend_tensor_get(layer_sg.ffn_post, post_buf.data(), 0, sizeof(float) * (size_t)hidden);
-
+            // Only read router decisions to CPU (64 bytes total — unavoidable)
             ggml_tensor * layer_selected = (!layer_sg.moe_selected.empty() && (size_t)il < layer_sg.moe_selected.size())
                 ? layer_sg.moe_selected[(size_t)il]
                 : nullptr;
             if (!layer_selected || !layer_sg.moe_weights) {
                 step_graph_destroy(layer_sg);
+                gpu_state.destroy();
                 return false;
             }
             ggml_backend_tensor_get(layer_selected, selected.data(), 0,
@@ -371,21 +380,20 @@ bool Qwen35MoeBackend::run_ar_decode_path(int committed, int n_gen,
             const auto prefn_t1 = HybridClock::now();
             decode_prefn_us += elapsed_us(prefn_t0, prefn_t1);
 
-            // Hybrid FFN: hot experts on GPU, cold on CPU
+            // GPU-resident hybrid FFN: hot on GPU, cold on CPU, combine on GPU
             auto & storage = target_weights().moe_hybrid->layers[(size_t)il];
             const auto & L = target_weights().layers[(size_t)il];
-            if (!eval_qwen35moe_hybrid_ffn_single(
+            if (!eval_qwen35moe_hybrid_ffn_gpu_resident(
                     target_backend(), target_weights(), L, storage, cpu_be,
-                    post_buf.data(), selected.data(), weights_buf.data(),
-                    (int)selected.size(), ffn_out, nullptr, nullptr)) {
+                    layer_sg.ffn_post, layer_sg.ffn_residual,
+                    gpu_state,
+                    selected.data(), weights_buf.data(),
+                    (int)selected.size())) {
                 step_graph_destroy(layer_sg);
+                gpu_state.destroy();
                 return false;
             }
-
-            // Layer output = FFN output + residual
-            for (int i = 0; i < hidden; ++i) {
-                act_cur[(size_t)i] = ffn_out[(size_t)i] + residual_buf[(size_t)i];
-            }
+            // gpu_state.act_cur now holds the layer output on GPU
 
             // Track routing stats
             if (hybrid_telemetry_) {
@@ -413,9 +421,12 @@ bool Qwen35MoeBackend::run_ar_decode_path(int committed, int n_gen,
             }
         }
 
+        // Read final act_cur from GPU for logits projection (single 10KB read)
+        ggml_backend_tensor_get(gpu_state.act_cur, act_cur.data(), 0, sizeof(float) * (size_t)hidden);
         const auto logits_t0 = HybridClock::now();
         if (!project_logits(act_cur.data())) {
             step_graph_destroy(layer_sg);
+            gpu_state.destroy();
             return false;
         }
         const auto logits_t1 = HybridClock::now();
@@ -442,6 +453,7 @@ bool Qwen35MoeBackend::run_ar_decode_path(int committed, int n_gen,
         if (is_eos_tok(next_tok, target_weights())) break;
     }
     step_graph_destroy(layer_sg);
+    gpu_state.destroy();
     last_hot_selected_ = hot_selected_total;
     last_cold_selected_ = cold_selected_total;
     std::printf("[qwen35moe] hybrid decode stats: hot_selected=%llu cold_selected=%llu\n",

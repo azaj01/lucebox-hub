@@ -121,6 +121,26 @@ bool eval_qwen35moe_hybrid_ffn_batched(
     std::vector<float> &                out,
     std::string *                       err = nullptr);
 
+// GPU-resident single-token hybrid FFN eval: keeps data on GPU, only reads
+// router IDs to CPU for hot/cold partitioning.  Uses tensor_copy for GPU→GPU
+// transfers instead of round-tripping through host memory.
+// ffn_post_gpu: [n_embd] F32 on GPU — the post-attention-norm hidden state
+// ffn_residual_gpu: [n_embd] F32 on GPU — the pre-FFN residual
+// gpu_state: persistent GPU state with act_cur and combine graph
+// After call: gpu_state.act_cur holds the layer output on GPU.
+bool eval_qwen35moe_hybrid_ffn_gpu_resident(
+    ggml_backend_t                      gpu_backend,
+    const TargetWeights &               w,
+    const TargetLayer &                 L,
+    Qwen35MoeHybridLayerStorage &       storage,
+    ggml_backend_t                      cpu_backend,
+    ggml_tensor *                       ffn_post_gpu,
+    ggml_tensor *                       ffn_residual_gpu,
+    GpuResidentState &                  gpu_state,
+    const int32_t *                     selected_ids,
+    const float *                       selected_weights,
+    int                                 n_selected);
+
 // Build/rebuild cached hot FFN graph for a given number of hot experts.
 bool build_cached_hot_graph(
     CachedFfnGraph & out,

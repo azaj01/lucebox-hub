@@ -1188,4 +1188,157 @@ bool init_gpu_resident_state(GpuResidentState & out, ggml_backend_t backend, int
     return true;
 }
 
+// ─── GPU-Resident hybrid FFN eval ─────────────────────────────────────────────
+// Keeps activation on GPU: only reads router IDs (64B) to CPU, and ffn_post
+// to CPU only when cold experts are selected.  All other data movement is
+// GPU→GPU via ggml_backend_tensor_copy.
+
+bool eval_qwen35moe_hybrid_ffn_gpu_resident(
+    ggml_backend_t                      gpu_backend,
+    const TargetWeights &               w,
+    const TargetLayer &                 L,
+    Qwen35MoeHybridLayerStorage &       storage,
+    ggml_backend_t                      cpu_backend,
+    ggml_tensor *                       ffn_post_gpu,
+    ggml_tensor *                       ffn_residual_gpu,
+    GpuResidentState &                  gpu_state,
+    const int32_t *                     selected_ids,
+    const float *                       selected_weights,
+    int                                 n_selected) {
+
+    const int n_embd = w.n_embd;
+
+    // ── Partition into hot/cold ──
+    std::vector<int32_t> hot_ids;
+    std::vector<float> hot_weights;
+    std::vector<int32_t> cold_ids;
+    std::vector<float> cold_weights;
+    hot_ids.reserve((size_t)n_selected);
+    hot_weights.reserve((size_t)n_selected);
+
+    for (int i = 0; i < n_selected; ++i) {
+        const int32_t gid = selected_ids[i];
+        if (gid < 0 || gid >= (int32_t)storage.hot_local_by_global.size()) return false;
+        const int32_t hot_local = storage.hot_local_by_global[(size_t)gid];
+        if (hot_local >= 0) {
+            hot_ids.push_back(hot_local);
+            hot_weights.push_back(selected_weights[i]);
+        } else {
+            const int32_t cold_local = storage.cold_local_by_global[(size_t)gid];
+            if (cold_local >= 0) {
+                cold_ids.push_back(cold_local);
+                cold_weights.push_back(selected_weights[i]);
+            }
+        }
+    }
+
+    const int n_hot = (int)hot_ids.size();
+    const bool has_hot = (n_hot > 0);
+    const bool has_shared = (L.ffn_up_shexp && L.ffn_gate_shexp && L.ffn_down_shexp);
+    const bool has_cold = !cold_ids.empty();
+    const int n_cold = (int)cold_ids.size();
+
+    // ── GPU→GPU: copy residual to combine input ──
+    ggml_backend_tensor_copy(ffn_residual_gpu, gpu_state.combine.residual_in);
+
+    // ── Prepare hot graph input via GPU→GPU copy ──
+    bool hot_async_launched = false;
+    if (has_hot || has_shared) {
+        if (!storage.hot_graph.valid() || storage.hot_graph.n_hot != n_hot) {
+            build_cached_hot_graph(storage.hot_graph, gpu_backend,
+                                   storage.gate_hot, storage.up_hot, storage.down_hot, storage.gate_up_hot,
+                                   L.ffn_gate_exps_s, L.ffn_up_exps_s, L.ffn_down_exps_s, L.ffn_gate_up_exps_s,
+                                   L, n_embd, w.n_ff_exp, n_hot);
+        }
+        if (storage.hot_graph.valid() && storage.hot_graph.n_hot == n_hot) {
+            // GPU→GPU copy: ffn_post → hot_graph.inp (no PCIe!)
+            ggml_backend_tensor_copy(ffn_post_gpu, storage.hot_graph.inp);
+            if (storage.hot_graph.ids && has_hot) {
+                ggml_backend_tensor_set(storage.hot_graph.ids, hot_ids.data(), 0,
+                                        sizeof(int32_t) * (size_t)n_hot);
+            }
+            if (storage.hot_graph.weights && has_hot) {
+                ggml_backend_tensor_set(storage.hot_graph.weights, hot_weights.data(), 0,
+                                        sizeof(float) * (size_t)n_hot);
+            }
+        }
+    }
+
+    // ── If cold needed, read ffn_post to CPU BEFORE launching hot async ──
+    // (to avoid serializing GPU queue with a device→host read mid-kernel)
+    std::vector<float> post_host;
+    if (has_cold) {
+        post_host.resize((size_t)n_embd);
+        ggml_backend_tensor_get(ffn_post_gpu, post_host.data(), 0, sizeof(float) * (size_t)n_embd);
+    }
+
+    // ── Launch hot async (GPU kernels in flight) ──
+    if ((has_hot || has_shared) && storage.hot_graph.valid() && storage.hot_graph.n_hot == n_hot) {
+        ggml_backend_graph_compute_async(gpu_backend, storage.hot_graph.gf);
+        hot_async_launched = true;
+    }
+
+    // ── Cold path on CPU (overlaps with hot GPU kernels) ──
+    std::vector<float> cold_result;
+    if (has_cold) {
+        if (!storage.cold_graph.valid() || storage.cold_graph.n_hot != n_cold) {
+            build_cached_cold_graph(storage.cold_graph, cpu_backend,
+                                    storage.gate_cold, storage.up_cold, storage.down_cold, storage.gate_up_cold,
+                                    L.ffn_gate_exps_s, L.ffn_up_exps_s, L.ffn_down_exps_s, L.ffn_gate_up_exps_s,
+                                    n_embd, w.n_ff_exp, n_cold);
+        }
+        if (storage.cold_graph.valid() && storage.cold_graph.n_hot == n_cold) {
+            ggml_backend_tensor_set(storage.cold_graph.inp, post_host.data(), 0,
+                                    sizeof(float) * (size_t)n_embd);
+            ggml_backend_tensor_set(storage.cold_graph.ids, cold_ids.data(), 0,
+                                    sizeof(int32_t) * (size_t)n_cold);
+            ggml_backend_tensor_set(storage.cold_graph.weights, cold_weights.data(), 0,
+                                    sizeof(float) * (size_t)n_cold);
+            auto st = ggml_backend_graph_compute(cpu_backend, storage.cold_graph.gf);
+            if (st != GGML_STATUS_SUCCESS) {
+                if (hot_async_launched) ggml_backend_synchronize(gpu_backend);
+                return false;
+            }
+            cold_result.resize((size_t)n_embd);
+            ggml_backend_tensor_get(storage.cold_graph.output, cold_result.data(), 0,
+                                    sizeof(float) * (size_t)n_embd);
+        } else {
+            // Fallback: cold graph build failed — shouldn't happen
+            if (hot_async_launched) ggml_backend_synchronize(gpu_backend);
+            return false;
+        }
+    }
+
+    // ── Sync hot graph and copy output to combine.hot_in ──
+    if (hot_async_launched) {
+        ggml_backend_synchronize(gpu_backend);
+        // GPU→GPU: hot output → combine.hot_in
+        ggml_backend_tensor_copy(storage.hot_graph.output, gpu_state.combine.hot_in);
+    } else {
+        // No hot/shared: zero hot_in
+        std::vector<float> zeros((size_t)n_embd, 0.0f);
+        ggml_backend_tensor_set(gpu_state.combine.hot_in, zeros.data(), 0,
+                                sizeof(float) * (size_t)n_embd);
+    }
+
+    // ── Upload cold result (or zeros) to combine.cold_in ──
+    if (has_cold) {
+        ggml_backend_tensor_set(gpu_state.combine.cold_in, cold_result.data(), 0,
+                                sizeof(float) * (size_t)n_embd);
+    } else {
+        std::vector<float> zeros((size_t)n_embd, 0.0f);
+        ggml_backend_tensor_set(gpu_state.combine.cold_in, zeros.data(), 0,
+                                sizeof(float) * (size_t)n_embd);
+    }
+
+    // ── Compute residual combine on GPU: output = residual + hot + cold ──
+    auto st = ggml_backend_graph_compute(gpu_backend, gpu_state.combine.gf);
+    if (st != GGML_STATUS_SUCCESS) return false;
+
+    // ── Copy combine output to persistent act_cur (GPU→GPU) ──
+    ggml_backend_tensor_copy(gpu_state.combine.output, gpu_state.act_cur);
+
+    return true;
+}
+
 }  // namespace dflash::common
