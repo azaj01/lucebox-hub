@@ -90,26 +90,6 @@ static ggml_tensor * new_like_with_expert_count(ggml_context * ctx, ggml_tensor 
 
 } // namespace
 
-Qwen35MoeHybridStorage::Qwen35MoeHybridStorage(Qwen35MoeHybridStorage && other) noexcept {
-    *this = std::move(other);
-}
-
-Qwen35MoeHybridStorage & Qwen35MoeHybridStorage::operator=(Qwen35MoeHybridStorage && other) noexcept {
-    if (this == &other) return *this;
-    for (auto & layer : layers) {
-        if (layer.hot_buf) ggml_backend_buffer_free(layer.hot_buf);
-        if (layer.hot_ctx) ggml_free(layer.hot_ctx);
-        if (layer.cold_buf) ggml_backend_buffer_free(layer.cold_buf);
-        if (layer.cold_ctx) ggml_free(layer.cold_ctx);
-    }
-    if (cpu_backend) ggml_backend_free(cpu_backend);
-    cpu_backend = other.cpu_backend;
-    placement = std::move(other.placement);
-    layers = std::move(other.layers);
-    other.cpu_backend = nullptr;
-    return *this;
-}
-
 Qwen35MoeHybridStorage::~Qwen35MoeHybridStorage() {
     for (auto & layer : layers) {
         layer.hot_graph.free();
@@ -167,19 +147,19 @@ bool build_qwen35moe_hybrid_storage(const TargetWeights & w,
         return false;
     }
 
-    Qwen35MoeHybridStorage tmp;
-    tmp.placement = placement;
-    tmp.layers.resize((size_t)w.n_layer);
-    tmp.cpu_backend = ggml_backend_cpu_init();
-    if (!tmp.cpu_backend) {
+    
+    out.placement = placement;
+    out.layers.resize((size_t)w.n_layer);
+    out.cpu_backend = ggml_backend_cpu_init();
+    if (!out.cpu_backend) {
         if (err) *err = "failed to init cpu backend";
         return false;
     }
-    ggml_backend_cpu_set_n_threads(tmp.cpu_backend, std::max(1, std::min(w.n_expert_used, 8)));
+    ggml_backend_cpu_set_n_threads(out.cpu_backend, std::max(1, std::min(w.n_expert_used, 8)));
 
     for (int il = 0; il < w.n_layer; ++il) {
         const TargetLayer & L = w.layers[(size_t)il];
-        Qwen35MoeHybridLayerStorage & dst = tmp.layers[(size_t)il];
+        Qwen35MoeHybridLayerStorage & dst = out.layers[(size_t)il];
         dst.hot_expert_ids = placement.hot_expert_ids[(size_t)il];
         dst.hot_local_by_global.assign((size_t)w.n_expert, -1);
         dst.cold_local_by_global.assign((size_t)w.n_expert, -1);
@@ -288,7 +268,7 @@ bool build_qwen35moe_hybrid_storage(const TargetWeights & w,
                 dst.up_cold   = new_like_with_expert_count(dst.cold_ctx, L.ffn_up_exps, cold_count);
                 dst.down_cold = new_like_with_expert_count(dst.cold_ctx, L.ffn_down_exps, cold_count);
             }
-            dst.cold_buf = ggml_backend_alloc_ctx_tensors(dst.cold_ctx, tmp.cpu_backend);
+            dst.cold_buf = ggml_backend_alloc_ctx_tensors(dst.cold_ctx, out.cpu_backend);
             if (!dst.cold_buf) {
                 if (err) *err = "failed to allocate cold expert buffer";
                 return false;
@@ -343,7 +323,6 @@ bool build_qwen35moe_hybrid_storage(const TargetWeights & w,
         }
     }
 
-    out = std::move(tmp);
     return true;
 }
 
@@ -368,20 +347,20 @@ bool build_qwen35moe_hybrid_storage_from_file(
         return false;
     }
 
-    Qwen35MoeHybridStorage tmp;
-    tmp.placement = placement;
-    tmp.layers.resize((size_t)w.n_layer);
-    tmp.cpu_backend = ggml_backend_cpu_init();
-    if (!tmp.cpu_backend) {
+    
+    out.placement = placement;
+    out.layers.resize((size_t)w.n_layer);
+    out.cpu_backend = ggml_backend_cpu_init();
+    if (!out.cpu_backend) {
         if (err) *err = "failed to init cpu backend";
         return false;
     }
-    ggml_backend_cpu_set_n_threads(tmp.cpu_backend, std::max(1, std::min(w.n_expert_used, 8)));
+    ggml_backend_cpu_set_n_threads(out.cpu_backend, std::max(1, std::min(w.n_expert_used, 8)));
 
     for (int il = 0; il < w.n_layer; ++il) {
         const TargetLayer & L = w.layers[(size_t)il];
         const LayerExpertFileData & fd = file_data[(size_t)il];
-        Qwen35MoeHybridLayerStorage & dst = tmp.layers[(size_t)il];
+        Qwen35MoeHybridLayerStorage & dst = out.layers[(size_t)il];
         dst.hot_expert_ids = placement.hot_expert_ids[(size_t)il];
         dst.hot_local_by_global.assign((size_t)w.n_expert, -1);
         dst.cold_local_by_global.assign((size_t)w.n_expert, -1);
@@ -485,7 +464,7 @@ bool build_qwen35moe_hybrid_storage_from_file(
                 dst.up_cold   = new_like_with_expert_count(dst.cold_ctx, L.ffn_up_exps, cold_count);
                 dst.down_cold = new_like_with_expert_count(dst.cold_ctx, L.ffn_down_exps, cold_count);
             }
-            dst.cold_buf = ggml_backend_alloc_ctx_tensors(dst.cold_ctx, tmp.cpu_backend);
+            dst.cold_buf = ggml_backend_alloc_ctx_tensors(dst.cold_ctx, out.cpu_backend);
             if (!dst.cold_buf) {
                 if (err) *err = "failed to allocate cold expert CPU buffer";
                 return false;
@@ -519,7 +498,6 @@ bool build_qwen35moe_hybrid_storage_from_file(
         }
     }
 
-    out = std::move(tmp);
     return true;
 }
 

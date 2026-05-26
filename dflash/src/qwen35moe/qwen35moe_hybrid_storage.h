@@ -71,8 +71,8 @@ struct Qwen35MoeHybridStorage {
     Qwen35MoeHybridStorage() = default;
     Qwen35MoeHybridStorage(const Qwen35MoeHybridStorage &) = delete;
     Qwen35MoeHybridStorage & operator=(const Qwen35MoeHybridStorage &) = delete;
-    Qwen35MoeHybridStorage(Qwen35MoeHybridStorage && other) noexcept;
-    Qwen35MoeHybridStorage & operator=(Qwen35MoeHybridStorage && other) noexcept;
+    Qwen35MoeHybridStorage(Qwen35MoeHybridStorage &&) = delete;
+    Qwen35MoeHybridStorage & operator=(Qwen35MoeHybridStorage &&) = delete;
     ~Qwen35MoeHybridStorage();
 
     ggml_backend_t cpu_backend = nullptr;

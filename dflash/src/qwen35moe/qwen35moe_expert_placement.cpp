@@ -82,12 +82,17 @@ bool Qwen35MoeExpertPlacement::load_json(const std::string & path,
     }
 
     Qwen35MoeExpertPlacement tmp;
-    tmp.n_layer = j.value("n_layer", 0);
-    tmp.n_expert = j.value("n_expert", 0);
-    tmp.n_expert_used = j.value("n_expert_used", 0);
-    tmp.total_hot = j.value("total_hot", 0);
-    tmp.hot_counts = j.value("hot_counts", std::vector<int>{});
-    tmp.hot_expert_ids = j.value("hot_expert_ids", std::vector<std::vector<int32_t>>{});
+    try {
+        tmp.n_layer = j.value("n_layer", 0);
+        tmp.n_expert = j.value("n_expert", 0);
+        tmp.n_expert_used = j.value("n_expert_used", 0);
+        tmp.total_hot = j.value("total_hot", 0);
+        tmp.hot_counts = j.value("hot_counts", std::vector<int>{});
+        tmp.hot_expert_ids = j.value("hot_expert_ids", std::vector<std::vector<int32_t>>{});
+    } catch (const std::exception & ex) {
+        if (err) *err = std::string("type error: ") + ex.what();
+        return false;
+    }
 
     if (tmp.n_layer <= 0 || tmp.n_expert <= 0 || tmp.n_expert_used <= 0 ||
         (int)tmp.hot_counts.size() != tmp.n_layer ||

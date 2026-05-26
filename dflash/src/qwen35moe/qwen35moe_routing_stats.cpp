@@ -173,9 +173,15 @@ bool Qwen35MoeRoutingStats::load_csv(const std::string & path,
         std::vector<uint64_t> row;
         const char * p = line.c_str();
         while (*p) {
+            // Skip whitespace
+            while (*p == ' ' || *p == '\t') ++p;
+            if (!*p) break;
             char * end = nullptr;
             uint64_t val = std::strtoull(p, &end, 10);
-            if (end == p) break;
+            if (end == p) {
+                if (err) *err = "malformed value in row " + std::to_string((int)(all_counts.size() / std::max((size_t)n_expert, (size_t)1)));
+                return false;
+            }
             row.push_back(val);
             p = end;
             if (*p == ',') ++p;
