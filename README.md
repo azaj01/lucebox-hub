@@ -39,9 +39,13 @@ Each one is self-contained with setup instructions and benchmark notes.
 
 ---
 
-## Supported Foundation Models
+## Supported Models & Drafters
 
-All speedups measured vs vendored llama.cpp (`-fa 1`, matching KV quant). Combined = geometric mean √(TTFT × decode) where both phases benched; otherwise the single-phase speedup.
+All speedups measured vs vendored llama.cpp (`-fa 1`, matching KV quant). Combined = geometric mean √(TTFT × decode) where both phases benched; otherwise the single-phase speedup. Drafters published on [huggingface.co/Lucebox](https://huggingface.co/Lucebox).
+
+<table>
+<tr>
+<td valign="top">
 
 | Model | Speedup |
 |-------|:-------:|
@@ -52,6 +56,20 @@ All speedups measured vs vendored llama.cpp (`-fa 1`, matching KV quant). Combin
 | Laguna-XS.2 33B-A3B Q4_K_M (DFlash + PFlash) | **5.4×** @ 128K |
 | Qwen 3.5-27B Q4_K_M (DFlash + PFlash, HIP) | **~2.6×** |
 | Gemma-4-26B-A4B Q4_K_M (DFlash) | **1.31×** |
+
+</td>
+<td valign="top">
+
+| Drafter | Target (phase) |
+|---------|----------------|
+| [`Lucebox/Qwen3.6-27B-DFlash-GGUF`](https://huggingface.co/Lucebox/Qwen3.6-27B-DFlash-GGUF) | Qwen 3.6-27B (decode) |
+| [`Lucebox/gemma-4-26B-A4B-it-DFlash-GGUF`](https://huggingface.co/Lucebox/gemma-4-26B-A4B-it-DFlash-GGUF) | Gemma-4-26B-A4B (decode) |
+| [`Lucebox/gemma-4-31B-it-DFlash-GGUF`](https://huggingface.co/Lucebox/gemma-4-31B-it-DFlash-GGUF) | Gemma-4-31B (decode) |
+| [`Qwen/Qwen3-0.6B`](https://huggingface.co/Qwen/Qwen3-0.6B) | any (prefill) |
+
+</td>
+</tr>
+</table>
 
 ## Tested Machines (GPU/APU)
 
