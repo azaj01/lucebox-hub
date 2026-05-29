@@ -266,11 +266,11 @@ uv run --directory megakernel python final_bench.py
 
 ## Why this exists
 
-Local AI should be a default, not a privilege: private data, no per-token bill, no vendor lock-in. The hardware to run capable models already sits on desks. The software to extract real throughput from those chips doesn't.
+Local AI should be the default, not a privilege. Private data, no per-token bill, no vendor lock-in. The hardware to run capable models already sits on desks. The software to get real throughput out of those chips does not.
 
-General-purpose frameworks dominated the last decade because hand-tuning kernels per chip was too expensive to justify. One stack, decent on everything, great on nothing. Speculative decoding, speculative prefill, fused megakernels are the methods that turn idle silicon into 3-10× speedups, but they stay locked to BF16 weights on data-center GPUs.
+General-purpose frameworks won the last decade because hand-tuning kernels for every chip cost more than it returned. One stack, decent on everything, great on nothing. Speculative decoding, speculative prefill, and fused megakernels are what turn idle silicon into 3-10× speedups, and they stay locked to BF16 weights on data-center GPUs. Consumer cards inherit the leftovers.
 
-AI-assisted development flips that calculus. Rewrites that took a quarter now fit in a release cycle. Lucebox ports those speculative methods down to quantized GGUF on consumer cards, one chip and one model family at a time. Apache 2.0 source, full writeup, reproducible benchmarks.
+AI-assisted development flips that calculus. Rewrites that took a quarter now fit in a release cycle. Lucebox ports those speculative methods down to quantized GGUF on consumer cards, one chip and one model family at a time. Apache 2.0 source, full writeups, reproducible benchmarks.
 
 <p align="center">
   <a href="https://lucebox.com"><img src="assets/lucebox.png" alt="Lucebox local AI PC" width="85%" /></a>
