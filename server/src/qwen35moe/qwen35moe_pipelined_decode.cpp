@@ -153,15 +153,13 @@ bool init_pipelined_decode_state(
         }
     }
 
-    // Build cached routed FFN graphs for DeltaNet layers (StreamMoE-inspired pipeline).
-    // Reuses the same build_cached_hot_graph as the split path but with n_expert_used
-    // slots (cold entries get weight=0 at runtime, contributing nothing to output).
+    // Build cached routed FFN graphs for ALL layers (StreamMoE-inspired pipeline).
+    // Includes attention layers — eliminates expensive split-path FFN for mixed layers.
+    // Cold entries get weight=0 at runtime, contributing nothing to output.
     out.cached_routed_ffn.resize((size_t)w.n_layer);
     int routed_count = 0;
     if (!routed_disabled) {
         for (int il = 0; il < w.n_layer; ++il) {
-            const bool is_attn = (((il + 1) % w.full_attention_interval) == 0);
-            if (is_attn) continue;
             if ((size_t)il >= hybrid.layers.size()) continue;
 
             auto & storage = hybrid.layers[(size_t)il];
@@ -391,10 +389,70 @@ bool pipelined_decode_one_token(
         ggml_backend_synchronize(backend);
         if (tel) tel->routing_readback_us += pipe_elapsed_us(routing_t0, PipelineClock::now());
 
-        // ── FFN: hot/cold partition + compute ──
+        // ── FFN: use routed FFN (cold-masking) if graph available, else split path ──
         const auto ffn_t0 = PipelineClock::now();
         auto & storage = hybrid.layers[(size_t)il];
         const auto & L = w.layers[(size_t)il];
+
+        // Try routed FFN fast path for this layer (works for attention layers too)
+        auto & rffn = state.cached_routed_ffn[(size_t)il];
+        if (rffn.valid()) {
+            // Cold-masking approach: remap global→local, zero cold weights
+            int32_t local_ids[8];
+            float   masked_weights[8];
+            int layer_cold_hits = 0;
+            for (int i = 0; i < n_expert_used; ++i) {
+                int32_t gid = state.routing_ids_buf[(size_t)i];
+                int32_t lid = (gid >= 0 && gid < (int)storage.hot_local_by_global.size())
+                              ? storage.hot_local_by_global[(size_t)gid] : -1;
+                if (lid >= 0) {
+                    local_ids[i] = lid;
+                    masked_weights[i] = state.routing_weights_buf[(size_t)i];
+                } else {
+                    local_ids[i] = 0;
+                    masked_weights[i] = 0.0f;
+                    layer_cold_hits++;
+                }
+            }
+
+            // Upload IDs + weights, copy inputs, dispatch FFN + combine (all async)
+            ggml_backend_tensor_set_async(backend, rffn.ids, local_ids, 0,
+                                          sizeof(int32_t) * (size_t)n_expert_used);
+            ggml_backend_tensor_set_async(backend, rffn.weights, masked_weights, 0,
+                                          sizeof(float) * (size_t)n_expert_used);
+            ggml_backend_tensor_copy_async(backend, backend, ffn_post_gpu, rffn.inp);
+            ggml_backend_tensor_copy_async(backend, backend, ffn_residual_gpu, state.gpu_state.combine.residual_in);
+            ggml_backend_graph_compute_async(backend, rffn.gf);
+            ggml_backend_tensor_copy_async(backend, backend, rffn.output, state.gpu_state.combine.hot_in);
+
+            if (!state.cold_in_zeroed) {
+                static float zeros[8192] = {};
+                ggml_backend_tensor_set_async(backend, state.gpu_state.combine.cold_in, zeros, 0,
+                                               sizeof(float) * (size_t)n_embd);
+                state.cold_in_zeroed = true;
+            }
+            ggml_backend_graph_compute_async(backend, state.gpu_state.combine.gf);
+            ggml_backend_tensor_copy_async(backend, backend, state.gpu_state.combine.output, state.gpu_state.act_cur);
+
+            if (tel) {
+                uint64_t ffn_layer_us = pipe_elapsed_us(ffn_t0, PipelineClock::now());
+                tel->ffn_us += ffn_layer_us;
+                tel->total_layers++;
+                tel->routed_ffn_layers++;
+                if (layer_cold_hits > 0) {
+                    tel->mixed_layers++;
+                    tel->ffn_mixed_us += ffn_layer_us;
+                } else {
+                    tel->allhot_layers++;
+                    tel->ffn_allhot_us += ffn_layer_us;
+                }
+                tel->routed_cold_expert_hits += layer_cold_hits;
+                tel->routed_total_expert_slots += n_expert_used;
+            }
+            continue;
+        }
+
+        // ── Fallback: full split path (no routed FFN graph for this layer) ──
 
         // Partition into hot/cold (fast: just a lookup table scan, ~8 iterations)
         int n_hot = 0, n_cold = 0;
