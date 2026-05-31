@@ -2388,6 +2388,7 @@ static void test_props_runtime_shape() {
     TEST_ASSERT(rt["chunk"].get<int>()                   == 512);
     TEST_ASSERT(rt["target_device"].get<std::string>()   == "auto:0");
     TEST_ASSERT(rt["draft_device"].get<std::string>()    == "auto:0");
+    TEST_ASSERT(body["pflash"]["draft_residency"].get<std::string>() == "persistent");
 
     // draft_device is null when no draft model is loaded.
     cfg.draft_device.clear();

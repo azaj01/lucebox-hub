@@ -135,6 +135,7 @@ json build_props_body(const ServerConfig & config,
             {"bsa_enabled",  nullptr},
             {"bsa_alpha",    nullptr},
             {"lm_head_fix",  nullptr},
+            {"draft_residency", draft_residency_policy_name(config.draft_residency)},
         };
     } else {
         const char * bsa_env = std::getenv("DFLASH_FP_USE_BSA");

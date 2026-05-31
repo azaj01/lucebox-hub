@@ -1136,6 +1136,7 @@ void Gemma4Backend::free_decode_draft() {
     delete dflash_target_;
     dflash_target_ = nullptr;
     draft_feature_mirror_free(feature_mirror_);
+    free_gemma4_target_feat(cache_);
     if (dw_.ctx) {
         free_draft_weights(dw_);
     }
