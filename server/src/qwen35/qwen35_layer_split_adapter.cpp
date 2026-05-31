@@ -923,9 +923,10 @@ bool Qwen35LayerSplitAdapter::decode_ar(
             return run_qwen35_layer_split_forward(
                 shards_, shards_.front().weights, one, pos, 1, next_tok,
                 cfg_.kq_stride_pad, cfg_.fa_window,
-                cfg_.run_dflash ? &feature_ring_ : nullptr,
+                (cfg_.run_dflash && !remote_draft_.active()) ? &feature_ring_ : nullptr,
                 /*argmax_out=*/nullptr,
-                logits_out);
+                logits_out,
+                cfg_.run_dflash ? &remote_draft_ : nullptr);
         },
         [&](int tok) { return is_eos_tok(tok, w); },
         out_tokens, io);
