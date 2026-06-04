@@ -19,6 +19,7 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "sampler.h"
+#include "placement/draft_residency.h"
 
 namespace dflash::common {
 
@@ -137,6 +138,11 @@ struct GenerateResult {
     float                      accept_rate     = 0.0f;
     // True when spec decode actually ran (accept_rate==0 still needs a bandit update).
     bool                       spec_decode_ran = false;
+    // True when decode emitted only tokens that the API layer suppresses
+    // (for example an immediate EOS/EOT). This is semantically equivalent
+    // to zero output for clients and should take the same AR retry path as
+    // an empty token vector.
+    bool                       empty_visible_output = false;
 };
 
 // ─── Backend interface ──────────────────────────────────────────────────
@@ -157,12 +163,8 @@ struct ModelBackend {
     // ── Generation ───────────────────────────────────────────────────
     // Run a full prefill + decode cycle. Backend owns the strategy
     // (autoregressive, speculative, DDTree, …).
-    virtual GenerateResult generate(const GenerateRequest & req,
-                                     const DaemonIO & io) = 0;
-
-    GenerateResult generate_with_empty_spec_fallback(const GenerateRequest & req,
-                                                     const DaemonIO & io) {
-        GenerateResult result = generate(req, io);
+    GenerateResult generate(const GenerateRequest & req, const DaemonIO & io) {
+        GenerateResult result = generate_impl(req, io);
         if (!should_retry_empty_spec_decode(req, result)) return result;
 
         std::fprintf(stderr,
@@ -171,8 +173,11 @@ struct ModelBackend {
             result.decode_s);
         GenerateRequest retry = req;
         retry.force_ar_decode = true;
-        return merge_empty_spec_retry_result(result, generate(retry, io));
+        return merge_empty_spec_retry_result(result, generate_impl(retry, io));
     }
+
+    virtual GenerateResult generate_impl(const GenerateRequest & req,
+                                         const DaemonIO & io) = 0;
 
     // ── Snapshots ────────────────────────────────────────────────────
     // With right-sized CPU-resident snapshots, each slot costs only
@@ -186,13 +191,9 @@ struct ModelBackend {
 
     // RESTORE <slot> <prompt_path> <n_gen> — restore snapshot + generate.
     // Backend handles the diff-prefill and decode internally.
-    virtual GenerateResult restore_and_generate(int slot,
-                                                 const GenerateRequest & req,
-                                                 const DaemonIO & io) = 0;
-
-    GenerateResult restore_and_generate_with_empty_spec_fallback(
-            int slot, const GenerateRequest & req, const DaemonIO & io) {
-        GenerateResult result = restore_and_generate(slot, req, io);
+    GenerateResult restore_and_generate(int slot, const GenerateRequest & req,
+                                        const DaemonIO & io) {
+        GenerateResult result = restore_and_generate_impl(slot, req, io);
         if (!should_retry_empty_spec_decode(req, result)) return result;
 
         std::fprintf(stderr,
@@ -202,8 +203,12 @@ struct ModelBackend {
         GenerateRequest retry = req;
         retry.force_ar_decode = true;
         return merge_empty_spec_retry_result(result,
-                                             restore_and_generate(slot, retry, io));
+                                             restore_and_generate_impl(slot, retry, io));
     }
+
+    virtual GenerateResult restore_and_generate_impl(int slot,
+                                                     const GenerateRequest & req,
+                                                     const DaemonIO & io) = 0;
 
     static bool should_retry_empty_spec_decode(const GenerateRequest & req,
                                                const GenerateResult & result) {
@@ -211,7 +216,7 @@ struct ModelBackend {
             && !req.force_ar_decode
             && result.ok
             && result.spec_decode_ran
-            && result.tokens.empty();
+            && (result.tokens.empty() || result.empty_visible_output);
     }
 
     static GenerateResult merge_empty_spec_retry_result(
@@ -260,6 +265,7 @@ struct ModelBackend {
         std::string          drafter_path;    // GGUF path (for lazy-load)
         int                  drafter_gpu = 0;  // backend-local GPU for PFlash drafter
         bool                 skip_park = false; // true on >=32GB GPUs
+        DraftResidencyAction residency_action = DraftResidencyAction::KeepLoaded;
     };
 
     struct CompressResult {
