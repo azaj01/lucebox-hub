@@ -504,8 +504,13 @@ int moe_hybrid_cache_swap_in(MoeHybridLayerStorage & st, int global_expert,
     if (st.cache_slots <= 0) return -1;  // no cache
     const int cold_local = st.cold_local_by_global[(size_t)global_expert];
     if (cold_local < 0) return -1;       // not a cold expert
-    if (!st.gate_hot || !st.up_hot || !st.down_hot ||
-        !st.gate_cold || !st.up_cold || !st.down_cold) return -1;
+    // Validate the tensors for whichever expert layout this model uses.
+    if (st.fused_gate_up) {
+        if (!st.gate_up_hot || !st.down_hot || !st.gate_up_cold || !st.down_cold) return -1;
+    } else {
+        if (!st.gate_hot || !st.up_hot || !st.down_hot ||
+            !st.gate_cold || !st.up_cold || !st.down_cold) return -1;
+    }
 
     // Pick a free spare slot, else evict the LRU one.
     int slot = -1; uint64_t best = (uint64_t)-1;
@@ -522,9 +527,14 @@ int moe_hybrid_cache_swap_in(MoeHybridLayerStorage & st, int global_expert,
         const uint8_t * src = (const uint8_t *)cold_t->data + (size_t)cold_local * ebytes;
         ggml_backend_tensor_set(hot_t, src, (size_t)hslot * ebytes, ebytes);
     };
-    copy_slice(st.gate_cold, st.gate_hot, st.gate_expert_bytes);
-    copy_slice(st.up_cold,   st.up_hot,   st.up_expert_bytes);
-    copy_slice(st.down_cold, st.down_hot, st.down_expert_bytes);
+    if (st.fused_gate_up) {
+        copy_slice(st.gate_up_cold, st.gate_up_hot, st.gate_up_expert_bytes);
+        copy_slice(st.down_cold,    st.down_hot,    st.down_expert_bytes);
+    } else {
+        copy_slice(st.gate_cold, st.gate_hot, st.gate_expert_bytes);
+        copy_slice(st.up_cold,   st.up_hot,   st.up_expert_bytes);
+        copy_slice(st.down_cold, st.down_hot, st.down_expert_bytes);
+    }
 
     st.hot_local_by_global[(size_t)global_expert] = hslot;
     st.spare_global[(size_t)slot] = global_expert;
