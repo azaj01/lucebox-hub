@@ -25,6 +25,7 @@ public:
 
     virtual void begin_request(const GenerateRequest & req) { (void)req; }
     virtual void reset_request_state() = 0;
+    virtual int prefill_chunk_tokens() const { return 0; }
     virtual bool prefill(const std::vector<int32_t> & prompt,
                          int base_pos, int & last_tok) = 0;
     virtual bool decode_ar(int last_tok, int committed, int n_gen,
@@ -79,16 +80,16 @@ public:
     bool unpark(const std::string & what) override;
     bool is_target_parked() const override { return false; }
 
-    GenerateResult generate(const GenerateRequest & req,
-                            const DaemonIO & io) override;
+    GenerateResult generate_impl(const GenerateRequest & req,
+                                 const DaemonIO & io) override;
 
     bool snapshot_save(int slot) override;
     void snapshot_free(int slot) override;
     bool snapshot_used(int slot) const override;
     int  snapshot_cur_pos(int slot) const override;
-    GenerateResult restore_and_generate(int slot,
-                                        const GenerateRequest & req,
-                                        const DaemonIO & io) override;
+    GenerateResult restore_and_generate_impl(int slot,
+                                             const GenerateRequest & req,
+                                             const DaemonIO & io) override;
 
     CompressResult compress(const CompressRequest & req) override;
     bool handle_compress(const std::string & line,
