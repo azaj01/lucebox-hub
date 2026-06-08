@@ -258,6 +258,7 @@ add_library(dflash_common STATIC
     src/common/moe_hybrid_placement.cpp
     src/common/moe_hybrid_routing_stats.cpp
     src/common/moe_hybrid_storage.cpp
+    src/common/spark_corpus.cpp
     src/common/moe_hybrid_ffn_eval.cpp
     src/common/cold_ffn_cpu.cpp
     src/common/moe_hybrid_swap_manager.cpp

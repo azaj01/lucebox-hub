@@ -326,6 +326,16 @@ struct ModelBackend {
     // ── Cleanup ──────────────────────────────────────────────────────
     // Release all resources (weights, cache, snapshots, drafter).
     // Called by run_daemon() before returning.
+    // Spark day-one bootstrap: when true, the server feeds local agent history
+    // (Claude Code + Codex) through generate() before serving, then calls
+    // spark_bootstrap_finalize to save the profile and rebuild placement so the
+    // first session is already calibrated. Default: unsupported (live-traffic
+    // calibration still applies).
+    virtual bool spark_wants_bootstrap() const { return false; }
+    virtual bool spark_bootstrap_finalize(const std::string & profile_path) {
+        (void)profile_path; return false;
+    }
+
     virtual void shutdown() = 0;
 };
 

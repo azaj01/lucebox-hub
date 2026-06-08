@@ -422,7 +422,9 @@ bool build_cached_hot_graph(
     const MoeLayerDesc & desc,
     int n_embd,
     int n_ff_exp,
-    int n_hot) {
+    int n_hot,
+    bool gpu_remap,
+    int n_expert) {
 
     out.free();
     out.n_hot = n_hot;
@@ -443,6 +445,23 @@ bool build_cached_hot_graph(
         ggml_set_input(out.ids);
         out.weights = ggml_new_tensor_2d(out.ctx, GGML_TYPE_F32, n_hot, 1);
         ggml_set_input(out.weights);
+        if (gpu_remap && n_expert > 0) {
+            out.global_ids = ggml_new_tensor_2d(out.ctx, GGML_TYPE_I32, n_hot, 1);
+            ggml_set_input(out.global_ids);
+            out.raw_weights = ggml_new_tensor_2d(out.ctx, GGML_TYPE_F32, n_hot, 1);
+            ggml_set_input(out.raw_weights);
+            out.hot_local_lut = ggml_new_tensor_2d(out.ctx, GGML_TYPE_I32, 1, n_expert);
+            ggml_set_input(out.hot_local_lut);
+            out.valid_lut = ggml_new_tensor_2d(out.ctx, GGML_TYPE_F32, 1, n_expert);
+            ggml_set_input(out.valid_lut);
+            out.residual_in = ggml_new_tensor_2d(out.ctx, GGML_TYPE_F32, n_embd, 1);
+            ggml_set_input(out.residual_in);
+            ggml_tensor * lid = ggml_get_rows(out.ctx, out.hot_local_lut, out.global_ids);
+            out.ids = ggml_cont(out.ctx, ggml_reshape_2d(out.ctx, lid, n_hot, 1));
+            ggml_tensor * vm = ggml_get_rows(out.ctx, out.valid_lut, out.global_ids);
+            vm = ggml_reshape_2d(out.ctx, vm, n_hot, 1);
+            out.weights = ggml_mul(out.ctx, out.raw_weights, vm);
+        }
 
         ggml_tensor * cur_3d = ggml_reshape_3d(out.ctx, out.inp, n_embd, 1, 1);
         ggml_tensor * gu = nullptr;
@@ -502,6 +521,7 @@ bool build_cached_hot_graph(
         out.output = shared;
     }
     if (!out.output) { out.free(); return false; }
+    if (gpu_remap && out.residual_in) { out.output = ggml_cont(out.ctx, ggml_add(out.ctx, out.output, out.residual_in)); }
 
     out.gf = ggml_new_graph_custom(out.ctx, 2048, false);
     ggml_set_output(out.output);
@@ -1276,6 +1296,94 @@ bool eval_moe_hybrid_ffn_gpu_resident(
     const bool has_shared = (desc.ffn_up_shexp && desc.ffn_gate_shexp && desc.ffn_down_shexp);
     const bool has_cold = !cold_ids.empty();
     const int n_cold = (int)cold_ids.size();
+
+    // ── GPU-remap fast path (laguna): fold residual + hot-routed + shared into a
+    // single cached GPU graph that consumes the router's expert ids directly
+    // (cold experts masked to 0 via valid_lut). Removes the separate per-layer
+    // residual-combine graph_compute and the host hot/cold partition for the GPU
+    // path. Cold experts (rare under realistic placement) are added on CPU after.
+    // IEEE add is commutative, so this is bit-exact vs the split+combine path.
+    static const bool kLagunaGpuRemap = (std::getenv("DFLASH_LAGUNA_GPU_REMAP") != nullptr);
+    if (kLagunaGpuRemap) {
+        // Reactive bounded expert cache: pull selected cold experts into spare
+        // GPU slots (LRU evict) so the unified GPU FFN serves them on-die. After
+        // warmup the working set is resident and the CPU cold path is rarely taken.
+        static const bool kCache = (std::getenv("DFLASH_LAGUNA_EXPERT_CACHE") != nullptr);
+        if (kCache && storage.cache_slots > 0) {
+            for (int i = 0; i < n_selected; ++i)
+                moe_hybrid_cache_swap_in(storage, selected_ids[i], gpu_backend);
+        }
+        // Cold residue after caching (equals the original cold set when disabled).
+        std::vector<int32_t> cache_cold_ids; std::vector<float> cache_cold_w;
+        for (int i = 0; i < n_selected; ++i) {
+            const int32_t g = selected_ids[i];
+            if (g < 0 || g >= (int)storage.hot_local_by_global.size()) continue;
+            if (storage.hot_local_by_global[(size_t)g] < 0) {
+                const int32_t cl = storage.cold_local_by_global[(size_t)g];
+                if (cl >= 0) { cache_cold_ids.push_back(cl); cache_cold_w.push_back(selected_weights[i]); }
+            }
+        }
+        const bool has_cold2 = !cache_cold_ids.empty();
+        const int n_cold2 = (int)cache_cold_ids.size();
+        if (!storage.hot_graph.valid() || storage.hot_graph.n_hot != n_selected ||
+            !storage.hot_graph.global_ids) {
+            build_cached_hot_graph(storage.hot_graph, gpu_backend,
+                                   storage.gate_hot, storage.up_hot, storage.down_hot, storage.gate_up_hot,
+                                   desc.ffn_gate_exps_s, desc.ffn_up_exps_s, desc.ffn_down_exps_s, desc.ffn_gate_up_exps_s,
+                                   desc, n_embd, cfg.n_ff_exp, n_selected,
+                                   /*gpu_remap=*/true, cfg.n_expert);
+        }
+        if (!storage.hot_graph.valid() || !storage.hot_graph.global_ids ||
+            !storage.hot_graph.hot_local_lut || !storage.hot_graph.valid_lut ||
+            !storage.hot_graph.residual_in) {
+            return false;
+        }
+        {
+            std::vector<int32_t> lut((size_t)cfg.n_expert);
+            std::vector<float>   vlut((size_t)cfg.n_expert);
+            for (int e = 0; e < cfg.n_expert; ++e) {
+                const int32_t l = storage.hot_local_by_global[(size_t)e];
+                lut[(size_t)e]  = (l >= 0) ? l : 0;
+                vlut[(size_t)e] = (l >= 0) ? 1.0f : 0.0f;
+            }
+            ggml_backend_tensor_set(storage.hot_graph.hot_local_lut, lut.data(), 0,
+                                    sizeof(int32_t) * (size_t)cfg.n_expert);
+            ggml_backend_tensor_set(storage.hot_graph.valid_lut, vlut.data(), 0,
+                                    sizeof(float) * (size_t)cfg.n_expert);
+        }
+        ggml_backend_tensor_copy(ffn_post_gpu, storage.hot_graph.inp);
+        ggml_backend_tensor_copy(ffn_residual_gpu, storage.hot_graph.residual_in);
+        ggml_backend_tensor_set(storage.hot_graph.global_ids, selected_ids, 0,
+                                sizeof(int32_t) * (size_t)n_selected);
+        ggml_backend_tensor_set(storage.hot_graph.raw_weights, selected_weights, 0,
+                                sizeof(float) * (size_t)n_selected);
+        if (ggml_backend_graph_compute(gpu_backend, storage.hot_graph.gf) != GGML_STATUS_SUCCESS) {
+            return false;
+        }
+        if (!has_cold2) {
+            ggml_backend_tensor_copy(storage.hot_graph.output, gpu_state.act_cur);
+            return true;
+        }
+        std::vector<float> post_host((size_t)n_embd);
+        ggml_backend_tensor_get(ffn_post_gpu, post_host.data(), 0, sizeof(float) * (size_t)n_embd);
+        if (!storage.cold_graph.valid() || storage.cold_graph.n_hot != n_cold2) {
+            build_cached_cold_graph(storage.cold_graph, cpu_backend,
+                                    storage.gate_cold, storage.up_cold, storage.down_cold, storage.gate_up_cold,
+                                    desc.ffn_gate_exps_s, desc.ffn_up_exps_s, desc.ffn_down_exps_s, desc.ffn_gate_up_exps_s,
+                                    n_embd, cfg.n_ff_exp, n_cold2);
+        }
+        if (!storage.cold_graph.valid() || storage.cold_graph.n_hot != n_cold2) return false;
+        ggml_backend_tensor_set(storage.cold_graph.inp, post_host.data(), 0, sizeof(float) * (size_t)n_embd);
+        ggml_backend_tensor_set(storage.cold_graph.ids, cache_cold_ids.data(), 0, sizeof(int32_t) * (size_t)n_cold2);
+        ggml_backend_tensor_set(storage.cold_graph.weights, cache_cold_w.data(), 0, sizeof(float) * (size_t)n_cold2);
+        if (ggml_backend_graph_compute(cpu_backend, storage.cold_graph.gf) != GGML_STATUS_SUCCESS) return false;
+        std::vector<float> cold_res((size_t)n_embd), hot_res((size_t)n_embd);
+        ggml_backend_tensor_get(storage.cold_graph.output, cold_res.data(), 0, sizeof(float) * (size_t)n_embd);
+        ggml_backend_tensor_get(storage.hot_graph.output, hot_res.data(), 0, sizeof(float) * (size_t)n_embd);
+        for (int i = 0; i < n_embd; ++i) hot_res[(size_t)i] += cold_res[(size_t)i];
+        ggml_backend_tensor_set(gpu_state.act_cur, hot_res.data(), 0, sizeof(float) * (size_t)n_embd);
+        return true;
+    }
 
     // ── GPU→GPU: copy residual to combine input ──
     ggml_backend_tensor_copy(ffn_residual_gpu, gpu_state.combine.residual_in);

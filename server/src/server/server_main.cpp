@@ -17,6 +17,7 @@
 #include "common/backend_factory.h"
 #include "common/gguf_inspect.h"
 #include "common/layer_split_utils.h"
+#include "common/spark_corpus.h"
 #include "common/peer_access.h"
 #include "placement/pflash_placement.h"
 #include "placement/draft_residency.h"
@@ -299,6 +300,9 @@ int main(int argc, char ** argv) {
     BackendArgs bargs;
     ServerConfig sconfig;
     bargs.model_path = argv[1];
+    bool   spark_autotune = false; // --spark: self-tuning hot/cold MoE residency
+    int    spark_slots = -1;       // --spark-slots: explicit cache slots/layer (-1=auto)
+    double spark_vram_gib = 0.0;   // --spark-vram: total VRAM target in GiB (0=use card)
     std::string cache_type_k;  // explicit --cache-type-k override
     std::string cache_type_v;  // explicit --cache-type-v override
     bool target_device_seen = false;
@@ -406,6 +410,12 @@ int main(int argc, char ** argv) {
             bargs.fast_rollback = true;
         } else if (std::strcmp(argv[i], "--ddtree-budget") == 0 && i + 1 < argc) {
             bargs.ddtree_budget = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--spark") == 0) {
+            spark_autotune = true;
+        } else if (std::strcmp(argv[i], "--spark-slots") == 0 && i + 1 < argc) {
+            spark_slots = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--spark-vram") == 0 && i + 1 < argc) {
+            spark_vram_gib = std::atof(argv[++i]);
         } else if (std::strcmp(argv[i], "--no-cors") == 0) {
             sconfig.enable_cors = false;
         } else if (std::strcmp(argv[i], "--think-max-tokens") == 0 && i + 1 < argc) {
@@ -671,6 +681,49 @@ int main(int argc, char ** argv) {
     g_peer_access_opt_in = bargs.device.peer_access;
     std::fprintf(stderr, "[server] creating backend...\n");
     const std::string arch = detect_arch(bargs.model_path);
+    if (spark_autotune) {
+        // Self-tuning hot/cold MoE residency: enable the bounded expert cache
+        // (auto-tunes the working set at serve time), auto-load a learned
+        // placement profile next to the model if present, and keep persisting it
+        // from live traffic. One command; improves across restarts. Both laguna
+        // and qwen35moe.
+        const bool is_laguna  = (arch == "laguna");
+        const bool is_qwenmoe = (arch == "qwen35moe");
+        if (is_laguna || is_qwenmoe) {
+            const std::string pfx = is_laguna ? "DFLASH_LAGUNA_" : "DFLASH_QWEN35MOE_";
+            const std::string profile = std::string(bargs.model_path) + ".spark.csv";
+            std::FILE * pf = std::fopen(profile.c_str(), "rb");
+            const bool have_profile = (pf != nullptr);
+            if (pf) std::fclose(pf);
+            ::setenv("DFLASH_SPARK", "1", 1);   // backend auto-sizes the cache ring from the VRAM target
+            if (spark_vram_gib > 0.0)
+                ::setenv("DFLASH_SPARK_VRAM_MB",
+                         std::to_string((long long)(spark_vram_gib * 1024.0)).c_str(), 1);
+            if (spark_slots >= 0)               // explicit --spark-slots overrides auto-sizing
+                ::setenv((pfx + "CACHE_SLOTS").c_str(), std::to_string(spark_slots).c_str(), 1);
+            if (is_laguna) {
+                ::setenv("DFLASH_LAGUNA_EXPERT_CACHE", "1", 1);
+                ::setenv("DFLASH_LAGUNA_GPU_REMAP", "1", 1);
+            }
+            if (have_profile) ::setenv((pfx + "HOTNESS").c_str(), profile.c_str(), 1);
+            // Persist the learned routing profile after each request. laguna saves
+            // via NEXT_PLACEMENT_OUT; qwen35moe via RUNTIME_STATS_OUT (that var is
+            // what allocates its routing-stats accumulator).
+            const char * save_var = is_laguna ? "DFLASH_LAGUNA_NEXT_PLACEMENT_OUT"
+                                              : "DFLASH_QWEN35MOE_RUNTIME_STATS_OUT";
+            ::setenv(save_var, profile.c_str(), 1);
+            if (spark_vram_gib > 0.0)
+                std::fprintf(stderr, "[spark] autotune ON (%s): vram target %.1f GiB, profile=%s (%s)\n",
+                    arch.c_str(), spark_vram_gib, profile.c_str(), have_profile ? "loaded" : "new");
+            else
+                std::fprintf(stderr, "[spark] autotune ON (%s): vram auto (use card), profile=%s (%s)\n",
+                    arch.c_str(), profile.c_str(), have_profile ? "loaded" : "new");
+        } else {
+            std::fprintf(stderr,
+                "[spark] --spark ignored: arch '%s' has no hot/cold MoE offload path\n",
+                arch.c_str());
+        }
+    }
     auto backend = create_backend(bargs);
     if (!backend) {
         std::fprintf(stderr, "[server] backend creation failed\n");
@@ -803,6 +856,45 @@ int main(int argc, char ** argv) {
     clamp_tier("high",   sconfig.effort_tiers.high);
     clamp_tier("x-high", sconfig.effort_tiers.x_high);
     clamp_tier("max",    sconfig.effort_tiers.max);
+
+    // Spark day-one bootstrap: --spark with no profile yet -> warm the placement
+    // from local agent history (Claude Code + Codex) before serving so the first
+    // session is already calibrated. One-time; live traffic refines it afterward.
+    // Backends without hybrid/routing support skip this (live calibration still
+    // applies).
+    if (spark_autotune && backend->spark_wants_bootstrap()) {
+        const std::string spark_profile = std::string(bargs.model_path) + ".spark.csv";
+        std::FILE * spf = std::fopen(spark_profile.c_str(), "rb");
+        const bool spark_have_profile = (spf != nullptr);
+        if (spf) std::fclose(spf);
+        if (!spark_have_profile) {
+            auto corpus = dflash::common::spark_scrape_corpus(/*max_chunks=*/150,
+                                                              /*chunk_chars=*/2000,
+                                                              /*min_chars=*/400);
+            if (corpus.empty()) {
+                std::fprintf(stderr, "[spark] no local history found; will calibrate from live traffic\n");
+            } else {
+                std::fprintf(stderr, "[spark] bootstrapping placement from %zu local history chunks (one-time)...\n",
+                             corpus.size());
+                DaemonIO bootstrap_io;
+                size_t fed = 0;
+                for (const auto & chunk : corpus) {
+                    GenerateRequest req;
+                    req.prompt = tokenizer.encode(chunk);
+                    if (req.prompt.size() < 8) continue;
+                    req.n_gen = 1;
+                    backend->generate(req, bootstrap_io);
+                    if (++fed % 50 == 0)
+                        std::fprintf(stderr, "[spark] bootstrap %zu/%zu chunks\n", fed, corpus.size());
+                }
+                if (backend->spark_bootstrap_finalize(spark_profile))
+                    std::fprintf(stderr, "[spark] bootstrap done: placement calibrated from local history -> %s\n",
+                                 spark_profile.c_str());
+                else
+                    std::fprintf(stderr, "[spark] bootstrap produced no profile; continuing on uniform\n");
+            }
+        }
+    }
 
     // Start HTTP server.
     std::fprintf(stderr, "\n");

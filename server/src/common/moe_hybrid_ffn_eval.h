@@ -170,7 +170,9 @@ bool build_cached_hot_graph(
     const MoeLayerDesc & desc,
     int n_embd,
     int n_ff_exp,
-    int n_hot);
+    int n_hot,
+    bool gpu_remap = false,
+    int n_expert = 0);
 
 // Build/rebuild cached cold FFN graph.
 bool build_cached_cold_graph(

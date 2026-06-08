@@ -10,6 +10,7 @@
 #include "laguna_internal.h"
 #include "dflash27b.h"
 
+#include <chrono>
 #include "../common/moe_hybrid_types.h"
 #include "../common/moe_hybrid_types_impl.h"
 #include "../common/moe_hybrid_placement.h"
@@ -163,7 +164,17 @@ GenerateResult LagunaBackend::generate_impl(const GenerateRequest & req,
                                         const DaemonIO & io) {
     if (hybrid_mode_ && moe_hybrid_) {
         auto result = generate_hybrid(req, io);
-        if (result.ok) maybe_post_request_swap();
+        if (result.ok) {
+            // Flush routing-frequency profile if requested (independent of swap).
+            if (!routing_stats_out_path_.empty() && routing_stats_) {
+                std::string serr;
+                if (!routing_stats_->save_csv(routing_stats_out_path_, &serr))
+                    std::fprintf(stderr, "[laguna-hybrid] profile save failed: %s\n", serr.c_str());
+                else
+                    std::fprintf(stderr, "[laguna-hybrid] profile saved: %s\n", routing_stats_out_path_.c_str());
+            }
+            maybe_post_request_swap();
+        }
         return result;
     }
 
@@ -283,7 +294,7 @@ GenerateResult LagunaBackend::generate_impl(const GenerateRequest & req,
     auto t_g0 = std::chrono::steady_clock::now();
     for (int s = 0; s < req.n_gen; ++s) {
         maybe_force_close(next_tok, s);
-        if (next_tok == w_.eos_id || next_tok == w_.eos_chat_id) break;
+        if (!std::getenv("DFLASH_IGNORE_EOS") && (next_tok == w_.eos_id || next_tok == w_.eos_chat_id)) break;
         result.tokens.push_back(next_tok);
         history.push_back(next_tok);
         if (should_emit) {
@@ -419,7 +430,7 @@ GenerateResult LagunaBackend::restore_and_generate_impl(int slot,
     auto t_g0 = std::chrono::steady_clock::now();
     for (int s = 0; s < req.n_gen; ++s) {
         maybe_force_close(next_tok, s);
-        if (next_tok == w_.eos_id || next_tok == w_.eos_chat_id) break;
+        if (!std::getenv("DFLASH_IGNORE_EOS") && (next_tok == w_.eos_id || next_tok == w_.eos_chat_id)) break;
         history.push_back(next_tok);
         result.tokens.push_back(next_tok);
         out_io.emit(next_tok);
@@ -637,6 +648,18 @@ bool LagunaBackend::init_hybrid_mode() {
         }
     }
 
+    // Spark: clamp experts to the --spark-vram target and auto-size the cache ring.
+    if (std::getenv("DFLASH_SPARK")) {
+        uint64_t target = 0;
+        if (const char * t = std::getenv("DFLASH_SPARK_VRAM_MB")) target = (uint64_t)std::atoll(t) << 20;
+        auto sb = dflash::common::spark_budget_split(expert_budget, total_expert_bytes, w_.n_expert,
+                                                     core_bytes + kv_total + safety_bytes, target);
+        expert_budget = sb.hot_bytes;
+        cache_slots_ = sb.cache_slots;
+        std::printf("[spark] vram=%s, hot=%.2f GiB, cache=%d slots/layer\n",
+                    target ? "target" : "auto(card)", expert_budget / 1073741824.0, cache_slots_);
+    }
+
     std::printf("[laguna] dynamic placement: gpu_total=%.2f GiB, core=%.2f GiB, "
                 "kv_cache=%.2f GiB (ctx=%d), warm=%.0f MB, safety=%.0f MB, "
                 "expert_budget=%.2f GiB (of %.2f GiB total experts)\n",
@@ -654,6 +677,10 @@ bool LagunaBackend::init_hybrid_mode() {
         std::fprintf(stderr, "[laguna-hybrid] no VRAM budget for experts\n");
         return false;
     }
+
+    // Stash for the Spark bootstrap rebuild (same budget + cache as this init).
+    spark_expert_budget_ = expert_budget;
+    layer_expert_bytes_  = layer_expert_bytes;
 
     // Step 4: Build placement
     MoeHybridPlacement placement;
@@ -682,79 +709,9 @@ bool LagunaBackend::init_hybrid_mode() {
     }
 
     // Step 5: Load expert data from GGUF mmap into hot/cold split buffers
-    {
-        ggml_context * expert_meta = nullptr;
-        gguf_init_params gip{};
-        gip.no_alloc = true;
-        gip.ctx = &expert_meta;
-        gguf_context * gctx = gguf_init_from_file(args_.target_path.c_str(), gip);
-        if (!gctx) {
-            std::fprintf(stderr, "[laguna-hybrid] failed to re-open GGUF for expert loading\n");
-            return false;
-        }
-
-        int fd = ::open(args_.target_path.c_str(), O_RDONLY);
-        if (fd < 0) {
-            gguf_free(gctx);
-            std::fprintf(stderr, "[laguna-hybrid] open failed for mmap\n");
-            return false;
-        }
-        struct stat st;
-        if (::fstat(fd, &st) < 0) {
-            ::close(fd);
-            gguf_free(gctx);
-            std::fprintf(stderr, "[laguna-hybrid] fstat failed\n");
-            return false;
-        }
-        const size_t file_size = (size_t)st.st_size;
-        void * mmap_addr = ::mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-        ::close(fd);
-        if (mmap_addr == MAP_FAILED) {
-            gguf_free(gctx);
-            std::fprintf(stderr, "[laguna-hybrid] mmap failed\n");
-            return false;
-        }
-
-        const size_t data_start = gguf_get_data_offset(gctx);
-        const auto * file_bytes = (const uint8_t *)mmap_addr;
-
-        // Build per-layer expert file data
-        std::vector<LayerExpertFileData> layer_file_data((size_t)w_.n_layer);
-        for (int il = w_.n_layer_dense_lead; il < w_.n_layer; ++il) {
-            char name[128];
-            auto find_tensor_data = [&](const char * suffix) -> ExpertTensorFileData {
-                std::snprintf(name, sizeof(name), "blk.%d.%s.weight", il, suffix);
-                int64_t tid = gguf_find_tensor(gctx, name);
-                if (tid < 0) return {};
-                size_t off = data_start + gguf_get_tensor_offset(gctx, tid);
-                size_t sz = gguf_get_tensor_size(gctx, tid);
-                if (off + sz > file_size) return {};
-                return { file_bytes + off, sz };
-            };
-
-            layer_file_data[(size_t)il].gate_exps    = find_tensor_data("ffn_gate_exps");
-            layer_file_data[(size_t)il].up_exps      = find_tensor_data("ffn_up_exps");
-            layer_file_data[(size_t)il].down_exps    = find_tensor_data("ffn_down_exps");
-            // laguna has no fused gate_up_exps
-        }
-
-        auto hybrid = std::make_shared<MoeHybridStorage>();
-        MoeHybridConfig hybrid_cfg = make_moe_hybrid_config(w_);
-        std::vector<MoeLayerDesc> layer_descs((size_t)w_.n_layer);
-        for (int il = 0; il < w_.n_layer; ++il) {
-            layer_descs[(size_t)il] = make_moe_layer_desc(w_.layers[(size_t)il]);
-        }
-        if (!build_moe_hybrid_storage_from_file(hybrid_cfg, backend_, placement, layer_descs, layer_file_data, *hybrid, &err)) {
-            ::munmap(mmap_addr, file_size);
-            gguf_free(gctx);
-            std::fprintf(stderr, "[laguna-hybrid] storage build failed: %s\n", err.c_str());
-            return false;
-        }
-
-        ::munmap(mmap_addr, file_size);
-        gguf_free(gctx);
-
-        moe_hybrid_ = std::move(hybrid);
+    if (!build_hybrid_storage_from_file(placement, moe_hybrid_, err)) {
+        std::fprintf(stderr, "[laguna-hybrid] storage build failed: %s\n", err.c_str());
+        return false;
     }
 
     // Print stats
@@ -798,13 +755,26 @@ bool LagunaBackend::init_hybrid_mode() {
     }
 
     // Allocate routing stats collector
-    if (!routing_stats_out_path_.empty()) {
+    // Allocate routing stats if we either dump a profile OR run online swap
+    // (post-request swap needs observed frequencies to build a swap plan).
+    if (!routing_stats_out_path_.empty() || swap_policy_.max_swaps_total > 0) {
         routing_stats_ = std::make_shared<MoeHybridRoutingStats>();
         routing_stats_->n_layer = w_.n_layer;
         routing_stats_->n_expert = w_.n_expert;
         routing_stats_->n_expert_used = w_.n_expert_used;
-        routing_stats_->counts.assign((size_t)w_.n_layer * (size_t)w_.n_expert, 0);
+        // Spark: seed the live accumulator from the loaded profile so calibration
+        // accumulates across restarts instead of resetting to zero each boot.
+        if (hotness_path && hotness_path[0] &&
+            hotness.counts.size() == (size_t)w_.n_layer * (size_t)w_.n_expert) {
+            routing_stats_->counts = hotness.counts;
+        } else {
+            routing_stats_->counts.assign((size_t)w_.n_layer * (size_t)w_.n_expert, 0);
+        }
         routing_stats_->layer_totals.assign((size_t)w_.n_layer, 0);
+        for (int il = 0; il < w_.n_layer; ++il)
+            for (int ie = 0; ie < w_.n_expert; ++ie)
+                routing_stats_->layer_totals[(size_t)il] +=
+                    routing_stats_->counts[(size_t)il * (size_t)w_.n_expert + ie];
     }
 
     std::fflush(stdout);
@@ -827,7 +797,8 @@ static bool build_laguna_layer_prefn_step(
     ggml_backend_t backend,
     int il,
     int kv_start,
-    int n_tokens)
+    int n_tokens,
+    const dflash::common::MoeHybridLayerStorage * hot_storage = nullptr)
 {
     step_graph_free(sg);
 
@@ -1003,15 +974,55 @@ static bool build_laguna_layer_prefn_step(
             weights_normed = ggml_scale(sg.ctx, weights_normed, w.expert_weights_scale);
         }
         sg.moe_weights = weights_normed;
-        ggml_set_output(weights_normed);
-
         sg.moe_selected.resize(1);
         sg.moe_selected[0] = selected;
 
-        ggml_build_forward_expand(sg.gf, normed);
-        ggml_build_forward_expand(sg.gf, ffn_inp);
-        ggml_build_forward_expand(sg.gf, selected);
-        ggml_build_forward_expand(sg.gf, weights_normed);
+        static const bool g_fuse = (std::getenv("DFLASH_LAGUNA_FUSE_FFN") != nullptr);
+        if (hot_storage && g_fuse && hot_storage->gate_hot) {
+            // Fused routed FFN in-graph (mirrors gpu_remap), drop-on-miss via valid_lut.
+            MoeLayerDesc d = make_moe_layer_desc(w.layers[(size_t)il]);
+            const int nu = w.n_expert_used;
+            sg.hot_local_lut = ggml_new_tensor_2d(sg.ctx, GGML_TYPE_I32, 1, w.n_expert); ggml_set_input(sg.hot_local_lut);
+            sg.valid_lut     = ggml_new_tensor_2d(sg.ctx, GGML_TYPE_F32, 1, w.n_expert); ggml_set_input(sg.valid_lut);
+            ggml_tensor * lid = ggml_get_rows(sg.ctx, sg.hot_local_lut, selected);
+            ggml_tensor * ids = ggml_cont(sg.ctx, ggml_reshape_2d(sg.ctx, lid, nu, 1));
+            ggml_tensor * vm  = ggml_reshape_2d(sg.ctx, ggml_get_rows(sg.ctx, sg.valid_lut, selected), nu, 1);
+            ggml_tensor * wmask = ggml_mul(sg.ctx, weights_normed, vm);
+            ggml_tensor * cur3 = ggml_reshape_3d(sg.ctx, normed, w.n_embd, 1, 1);
+            auto SC = [&](ggml_tensor * t, float s){ return s != 1.0f ? ggml_scale(sg.ctx, t, s) : t; };
+            ggml_tensor * ge = SC(ggml_mul_mat_id(sg.ctx, hot_storage->gate_hot, cur3, ids), d.ffn_gate_exps_s);
+            ggml_tensor * ue = SC(ggml_mul_mat_id(sg.ctx, hot_storage->up_hot,   cur3, ids), d.ffn_up_exps_s);
+            ggml_tensor * gu = ggml_swiglu_split(sg.ctx, ge, ue);
+            ggml_tensor * ex = SC(ggml_mul_mat_id(sg.ctx, hot_storage->down_hot, gu, ids), d.ffn_down_exps_s);
+            ex = ggml_mul(sg.ctx, ex, ggml_reshape_3d(sg.ctx, wmask, 1, nu, 1));
+            ggml_tensor * routed = nullptr;
+            for (int i = 0; i < nu; ++i) {
+                ggml_tensor * sl = ggml_view_2d(sg.ctx, ex, w.n_embd, 1, ex->nb[2], (size_t)i * ex->nb[1]);
+                routed = (i == 0) ? sl : ggml_add(sg.ctx, routed, sl);
+            }
+            ggml_tensor * shared = nullptr;
+            if (d.has_shared_expert()) {
+                ggml_tensor * shg = SC(ggml_mul_mat(sg.ctx, d.ffn_gate_shexp, normed), d.ffn_gate_shexp_s);
+                ggml_tensor * shu = SC(ggml_mul_mat(sg.ctx, d.ffn_up_shexp,   normed), d.ffn_up_shexp_s);
+                ggml_tensor * shgu = ggml_swiglu_split(sg.ctx, shg, shu);
+                shared = SC(ggml_mul_mat(sg.ctx, d.ffn_down_shexp, shgu), d.ffn_down_shexp_s);
+                if (d.ffn_gate_inp_shexp) {
+                    ggml_tensor * g2 = ggml_sigmoid(sg.ctx, SC(ggml_mul_mat(sg.ctx, d.ffn_gate_inp_shexp, normed), d.ffn_gate_inp_shexp_s));
+                    shared = ggml_mul(sg.ctx, shared, g2);
+                }
+            }
+            ggml_tensor * out = shared ? (routed ? ggml_add(sg.ctx, routed, shared) : shared) : routed;
+            ggml_tensor * layer_out = ggml_cont(sg.ctx, ggml_add(sg.ctx, out, ffn_inp));
+            sg.hidden_input = layer_out;
+            ggml_set_output(layer_out);
+            ggml_build_forward_expand(sg.gf, layer_out);
+        } else {
+            ggml_set_output(weights_normed);
+            ggml_build_forward_expand(sg.gf, normed);
+            ggml_build_forward_expand(sg.gf, ffn_inp);
+            ggml_build_forward_expand(sg.gf, selected);
+            ggml_build_forward_expand(sg.gf, weights_normed);
+        }
     }
 
     // Allocate
@@ -1032,9 +1043,66 @@ bool LagunaBackend::hybrid_forward_one_token(int32_t tok, int kv_pos,
                                               int32_t & argmax_out) {
     const int hidden = w_.n_embd;
     const int vocab = w_.embedder.n_vocab;
+    using _pclk = std::chrono::steady_clock;
+    const bool _prof = std::getenv("DFLASH_LAGUNA_PROFILE") != nullptr;
+    auto _pnow = []{ return std::chrono::steady_clock::now(); };
+    auto _pus = [](_pclk::time_point a, _pclk::time_point b){ return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
+    static uint64_t g_total=0, g_ffn=0, g_logits=0, g_build=0, g_compute=0, g_calls=0;
+    static uint64_t g_cold_experts=0, g_cold_layers=0;
+    const auto _t_start = _prof ? _pnow() : _pclk::time_point{};
 
     // Embed token
     if (!w_.embedder.embed(&tok, 1, act_cur.data())) return false;
+
+    // Single-graph hybrid decode: whole token in one graph (residency LUTs
+    // set once), instead of 40 per-layer graphs. Removes the per-layer host
+    // glue that caps the multi-graph path. Default ON for the hybrid-offload
+    // path; set DFLASH_LAGUNA_NO_SINGLE_GRAPH=1 to fall back to per-layer decode.
+    static const bool g_single_graph = (std::getenv("DFLASH_LAGUNA_NO_SINGLE_GRAPH") == nullptr);
+    if (g_single_graph && moe_hybrid_) {
+        static const bool _nm = (std::getenv("DFLASH_NO_MASK") != nullptr);
+        static std::vector<float> _sg_logits;
+        static std::vector<int32_t> _sg_sel;
+        if (!laguna_step_hybrid(backend_, w_, cache_, act_cur.data(), 1, kv_pos, _nm,
+                                *moe_hybrid_, _sg_logits, &_sg_sel))
+            return false;
+        // Reactive cache warm + routing observe, POST-compute (off the
+        // single-graph critical path): make each selected expert resident
+        // for the next token; over warmup drops fall to ~0 -> exact decode.
+        {
+            const int _nu = w_.n_expert_used;
+            static uint64_t _sg_cold = 0, _sg_calls = 0;
+            static const bool _sg_pf = (std::getenv("DFLASH_LAGUNA_PROFILE") != nullptr);
+            uint64_t _cold_this = 0;
+            for (int il = w_.n_layer_dense_lead; il < w_.n_layer; ++il) {
+                const int32_t * _sl = _sg_sel.data() + (size_t)il * _nu;
+                if (routing_stats_) routing_stats_->observe(il, _sl, _nu);
+                auto & _cst = moe_hybrid_->layers[(size_t)il];
+                for (int k = 0; k < _nu; ++k) {
+                    const int _g = _sl[k];
+                    if (_g < 0) continue;
+                    // Was this expert resident when the graph computed? (pre-swap residency)
+                    if (_g < (int)_cst.hot_local_by_global.size() &&
+                        _cst.hot_local_by_global[(size_t)_g] < 0)
+                        _cold_this++;
+                    if (_cst.cache_slots > 0)
+                        dflash::common::moe_hybrid_cache_swap_in(_cst, _g, backend_);
+                }
+            }
+            if (_sg_pf) {
+                _sg_cold += _cold_this;
+                if (++_sg_calls % 32 == 0) {
+                    std::fprintf(stderr, "[sg-prof] cold_experts/tok=%.2f (over 32)\n", _sg_cold / 32.0);
+                    _sg_cold = 0;
+                }
+            }
+        }
+        int _best = 0; float _bv = _sg_logits[0];
+        for (size_t i = 1; i < _sg_logits.size(); ++i)
+            if (_sg_logits[i] > _bv) { _bv = _sg_logits[i]; _best = (int)i; }
+        argmax_out = _best;
+        return true;
+    }
 
     // GPU-resident state for MoE layers
     GpuResidentState gpu_state;
@@ -1049,11 +1117,13 @@ bool LagunaBackend::hybrid_forward_one_token(int32_t tok, int kv_pos,
     for (int il = 0; il < w_.n_layer; ++il) {
         const bool is_dense = (il < w_.n_layer_dense_lead);
 
-        if (!build_laguna_layer_prefn_step(layer_sg, w_, cache_, backend_, il, kv_pos, 1)) {
+        const auto _t_b = _prof ? _pnow() : _pclk::time_point{};
+        if (!build_laguna_layer_prefn_step(layer_sg, w_, cache_, backend_, il, kv_pos, 1, &moe_hybrid_->layers[(size_t)il])) {
             step_graph_destroy(layer_sg);
             gpu_state.destroy();
             return false;
         }
+        if (_prof) g_build += _pus(_t_b, _pnow());
 
         // GPU→GPU: copy persistent act_cur to pre-FFN graph input
         ggml_backend_tensor_copy(gpu_state.act_cur, layer_sg.inp_embed);
@@ -1069,16 +1139,44 @@ bool LagunaBackend::hybrid_forward_one_token(int32_t tok, int kv_pos,
             ggml_backend_tensor_set(layer_sg.attn_mask, mask_data.data(), 0, sizeof(float) * (size_t)kv_len);
         }
 
+        static const bool g_fuse_dec = (std::getenv("DFLASH_LAGUNA_FUSE_FFN") != nullptr);
+        if (g_fuse_dec && !is_dense && layer_sg.hot_local_lut) {
+            auto & _st = moe_hybrid_->layers[(size_t)il];
+            std::vector<int32_t> _lut((size_t)w_.n_expert); std::vector<float> _vld((size_t)w_.n_expert);
+            for (int g = 0; g < w_.n_expert; ++g) {
+                int loc = (g < (int)_st.hot_local_by_global.size()) ? _st.hot_local_by_global[(size_t)g] : -1;
+                _lut[(size_t)g] = loc >= 0 ? loc : 0;
+                _vld[(size_t)g] = loc >= 0 ? 1.0f : 0.0f;
+            }
+            ggml_backend_tensor_set(layer_sg.hot_local_lut, _lut.data(), 0, sizeof(int32_t)*(size_t)w_.n_expert);
+            ggml_backend_tensor_set(layer_sg.valid_lut, _vld.data(), 0, sizeof(float)*(size_t)w_.n_expert);
+        }
+        const auto _t_c = _prof ? _pnow() : _pclk::time_point{};
         auto st = ggml_backend_graph_compute(backend_, layer_sg.gf);
         if (st != GGML_STATUS_SUCCESS) {
             step_graph_destroy(layer_sg);
             gpu_state.destroy();
             return false;
         }
+        if (_prof) g_compute += _pus(_t_c, _pnow());
 
         if (is_dense) {
             // Dense layer: read full output back to GPU-resident state
             ggml_backend_tensor_copy(layer_sg.hidden_input, gpu_state.act_cur);
+        } else if (g_fuse_dec && layer_sg.hidden_input) {
+            // Fused FFN computed in-graph -> layer output is hidden_input
+            ggml_backend_tensor_copy(layer_sg.hidden_input, gpu_state.act_cur);
+            // Warm the expert cache + observe routing so coverage rises (drops -> 0
+            // after warmup) and calibration still accumulates in the fused path.
+            {
+                ggml_backend_tensor_get(layer_sg.moe_selected[0], selected.data(), 0,
+                                        sizeof(int32_t) * selected.size());
+                if (routing_stats_) routing_stats_->observe(il, selected.data(), (int)selected.size());
+                auto & _cst = moe_hybrid_->layers[(size_t)il];
+                if (_cst.cache_slots > 0)
+                    for (int _k = 0; _k < (int)selected.size(); ++_k)
+                        dflash::common::moe_hybrid_cache_swap_in(_cst, selected[(size_t)_k], backend_);
+            }
         } else {
             // MoE layer: read router decisions, then do hybrid FFN eval
             ggml_tensor * sel_tensor = layer_sg.moe_selected[0];
@@ -1091,10 +1189,48 @@ bool LagunaBackend::hybrid_forward_one_token(int32_t tok, int kv_pos,
                 routing_stats_->observe(il, selected.data(), (int)selected.size());
             }
 
+            // Pre-gate trace capture: (block-input hidden, selected experts) per
+            // MoE layer. hidden = gpu_state.act_cur BEFORE this layer's FFN, i.e.
+            // exactly the signal available one step early at inference. Offline,
+            // train a predictor that prefetches experts to enable graph fusion.
+            {
+                static FILE * g_trace = nullptr;
+                static int64_t g_trace_n = 0, g_trace_max = 0, g_trace_flush = 0;
+                static bool g_trace_init = false;
+                if (!g_trace_init) {
+                    g_trace_init = true;
+                    if (const char * tp = std::getenv("DFLASH_LAGUNA_PREGATE_TRACE")) {
+                        g_trace = std::fopen(tp, "wb");
+                        g_trace_max = 100000;
+                        if (const char * mx = std::getenv("DFLASH_LAGUNA_PREGATE_MAX"))
+                            g_trace_max = std::atoll(mx);
+                        if (g_trace) std::fprintf(stderr, "[lag-pregate] tracing -> %s (max %lld n_embd=%d)\n", tp, (long long)g_trace_max, hidden);
+                    }
+                }
+                if (g_trace && g_trace_n < g_trace_max) {
+                    static std::vector<float> _hbuf;
+                    _hbuf.resize((size_t)hidden);
+                    ggml_backend_tensor_get(gpu_state.act_cur, _hbuf.data(), 0, sizeof(float)*(size_t)hidden);
+                    int16_t hdr[2] = { (int16_t)il, (int16_t)selected.size() };
+                    int32_t sel8[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
+                    for (int _k=0;_k<(int)selected.size() && _k<8;++_k) sel8[_k]=selected[(size_t)_k];
+                    std::fwrite(hdr, sizeof(hdr), 1, g_trace);
+                    std::fwrite(sel8, sizeof(sel8), 1, g_trace);
+                    std::fwrite(_hbuf.data(), sizeof(float), (size_t)hidden, g_trace);
+                    if (++g_trace_n - g_trace_flush >= 2000) { std::fflush(g_trace); g_trace_flush = g_trace_n; }
+                    if (g_trace_n == g_trace_max) { std::fflush(g_trace); std::fprintf(stderr, "[lag-pregate] trace full (%lld)\n", (long long)g_trace_n); }
+                }
+            }
+
             // Hybrid FFN: hot on GPU, cold on CPU, combine on GPU
             auto & storage = moe_hybrid_->layers[(size_t)il];
+            { int _lc=0; for (int _k=0;_k<(int)selected.size();++_k){ int _g=selected[(size_t)_k];
+                if (_g>=0 && _g<(int)storage.hot_local_by_global.size() && storage.hot_local_by_global[(size_t)_g]<0 && storage.cold_local_by_global[(size_t)_g]>=0) { _lc++; } }
+              if (_prof){ g_cold_experts+=(uint64_t)_lc; if(_lc>0) g_cold_layers++; } }
+
             MoeHybridConfig cfg = make_moe_hybrid_config(w_);
             MoeLayerDesc desc = make_moe_layer_desc(w_.layers[(size_t)il]);
+            const auto _t_ffn = _prof ? _pnow() : _pclk::time_point{};
             if (!eval_moe_hybrid_ffn_gpu_resident(
                     backend_, cfg, desc, storage, cpu_be,
                     layer_sg.ffn_post, layer_sg.ffn_residual,
@@ -1105,6 +1241,7 @@ bool LagunaBackend::hybrid_forward_one_token(int32_t tok, int kv_pos,
                 gpu_state.destroy();
                 return false;
             }
+            if (_prof) g_ffn += _pus(_t_ffn, _pnow());
         }
     }
 
@@ -1113,6 +1250,7 @@ bool LagunaBackend::hybrid_forward_one_token(int32_t tok, int kv_pos,
     step_graph_destroy(layer_sg);
     gpu_state.destroy();
 
+    const auto _t_logits = _prof ? _pnow() : _pclk::time_point{};
     // Project logits: final RMS norm + lm_head
     {
         ggml_init_params ip{};
@@ -1157,6 +1295,18 @@ bool LagunaBackend::hybrid_forward_one_token(int32_t tok, int kv_pos,
                 best = logits_buf[(size_t)j];
                 argmax_out = j;
             }
+        }
+    }
+    if (_prof) {
+        g_logits += _pus(_t_logits, _pnow());
+        g_total  += _pus(_t_start, _pnow());
+        if (++g_calls % 32 == 0) {
+            const double n = 32.0;
+            const double tot = g_total/n/1000.0, ffn = g_ffn/n/1000.0, lg = g_logits/n/1000.0;
+            const double bld = g_build/n/1000.0, cmp = g_compute/n/1000.0;
+            std::fprintf(stderr, "[lag-prof] avg/tok over 32: total=%.2f ms  prefn=%.2f (build=%.2f compute=%.2f)  ffn=%.2f  logits=%.2f  cold_experts/tok=%.1f cold_layers/tok=%.1f\n",
+                         tot, tot-ffn-lg, bld, cmp, ffn, lg, g_cold_experts/n, g_cold_layers/n);
+            g_total=g_ffn=g_logits=g_build=g_compute=0; g_cold_experts=g_cold_layers=0;
         }
     }
     return true;
@@ -1421,7 +1571,7 @@ GenerateResult LagunaBackend::generate_hybrid(const GenerateRequest & req,
     auto t_g0 = std::chrono::steady_clock::now();
     for (int s = 0; s < req.n_gen; ++s) {
         maybe_force_close(next_tok, s);
-        if (next_tok == w_.eos_id || next_tok == w_.eos_chat_id) break;
+        if (!std::getenv("DFLASH_IGNORE_EOS") && (next_tok == w_.eos_id || next_tok == w_.eos_chat_id)) break;
         result.tokens.push_back(next_tok);
         history.push_back(next_tok);
         if (should_emit) {
@@ -1454,6 +1604,87 @@ GenerateResult LagunaBackend::generate_hybrid(const GenerateRequest & req,
     return result;
 }
 
+bool LagunaBackend::spark_wants_bootstrap() const {
+    return moe_hybrid_ && routing_stats_ && !layer_expert_bytes_.empty() && spark_expert_budget_ > 0;
+}
+
+bool LagunaBackend::spark_bootstrap_finalize(const std::string & profile_path) {
+    if (!spark_wants_bootstrap()) return false;
+    std::string err;
+    routing_stats_->save_csv(profile_path, &err);  // persist the observed routing
+    MoeHybridPlacement placement;
+    if (!MoeHybridPlacement::build_from_stats_with_layer_bytes(
+            *routing_stats_, layer_expert_bytes_, spark_expert_budget_,
+            std::min(w_.n_expert_used, w_.n_expert), placement, &err)) {
+        std::fprintf(stderr, "[spark] bootstrap placement build failed: %s\n", err.c_str());
+        return false;
+    }
+    if (!build_hybrid_storage_from_file(placement, moe_hybrid_, err)) {
+        std::fprintf(stderr, "[spark] bootstrap storage rebuild failed: %s\n", err.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool LagunaBackend::build_hybrid_storage_from_file(
+        const MoeHybridPlacement & placement,
+        std::shared_ptr<MoeHybridStorage> & out_storage,
+        std::string & err) {
+    ggml_context * expert_meta = nullptr;
+    gguf_init_params gip{};
+    gip.no_alloc = true;
+    gip.ctx = &expert_meta;
+    gguf_context * gctx = gguf_init_from_file(args_.target_path.c_str(), gip);
+    if (!gctx) { err = "failed to re-open GGUF for expert loading"; return false; }
+
+    int fd = ::open(args_.target_path.c_str(), O_RDONLY);
+    if (fd < 0) { gguf_free(gctx); err = "open failed for mmap"; return false; }
+    struct stat st;
+    if (::fstat(fd, &st) < 0) { ::close(fd); gguf_free(gctx); err = "fstat failed"; return false; }
+    const size_t file_size = (size_t)st.st_size;
+    void * mmap_addr = ::mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    ::close(fd);
+    if (mmap_addr == MAP_FAILED) { gguf_free(gctx); err = "mmap failed"; return false; }
+
+    const size_t data_start = gguf_get_data_offset(gctx);
+    const auto * file_bytes = (const uint8_t *)mmap_addr;
+
+    std::vector<LayerExpertFileData> layer_file_data((size_t)w_.n_layer);
+    for (int il = w_.n_layer_dense_lead; il < w_.n_layer; ++il) {
+        char name[128];
+        auto find_tensor_data = [&](const char * suffix) -> ExpertTensorFileData {
+            std::snprintf(name, sizeof(name), "blk.%d.%s.weight", il, suffix);
+            int64_t tid = gguf_find_tensor(gctx, name);
+            if (tid < 0) return {};
+            size_t off = data_start + gguf_get_tensor_offset(gctx, tid);
+            size_t sz = gguf_get_tensor_size(gctx, tid);
+            if (off + sz > file_size) return {};
+            return { file_bytes + off, sz };
+        };
+        layer_file_data[(size_t)il].gate_exps = find_tensor_data("ffn_gate_exps");
+        layer_file_data[(size_t)il].up_exps   = find_tensor_data("ffn_up_exps");
+        layer_file_data[(size_t)il].down_exps = find_tensor_data("ffn_down_exps");
+        // laguna has no fused gate_up_exps
+    }
+
+    auto hybrid = std::make_shared<MoeHybridStorage>();
+    MoeHybridConfig hybrid_cfg = make_moe_hybrid_config(w_);
+    std::vector<MoeLayerDesc> layer_descs((size_t)w_.n_layer);
+    for (int il = 0; il < w_.n_layer; ++il) {
+        layer_descs[(size_t)il] = make_moe_layer_desc(w_.layers[(size_t)il]);
+    }
+    int cache_slots = 0;
+    if (const char * cs = std::getenv("DFLASH_LAGUNA_CACHE_SLOTS")) cache_slots = std::max(0, std::atoi(cs));
+    else if (cache_slots_ >= 0) cache_slots = cache_slots_;
+    bool ok = build_moe_hybrid_storage_from_file(hybrid_cfg, backend_, placement,
+                                                 layer_descs, layer_file_data, *hybrid, &err, cache_slots);
+    ::munmap(mmap_addr, file_size);
+    gguf_free(gctx);
+    if (!ok) return false;
+    out_storage = std::move(hybrid);
+    return true;
+}
+
 void LagunaBackend::maybe_post_request_swap() {
     if (!hybrid_mode_ || !moe_hybrid_ || swap_policy_.max_swaps_total <= 0) return;
     if (!routing_stats_) return;
@@ -1467,15 +1698,11 @@ void LagunaBackend::maybe_post_request_swap() {
     }
     if (plan.actions.empty()) return;
 
-    // Rebuild storage with new placement
-    auto rebuilt = std::make_shared<MoeHybridStorage>();
-    MoeHybridConfig swap_cfg = make_moe_hybrid_config(w_);
-    std::vector<MoeLayerDesc> swap_descs((size_t)w_.n_layer);
-    for (int il = 0; il < w_.n_layer; ++il) {
-        swap_descs[(size_t)il] = make_moe_layer_desc(w_.layers[(size_t)il]);
-    }
-    if (!build_moe_hybrid_storage(swap_cfg, backend_,
-                                        plan.next_placement, swap_descs, *rebuilt, &err)) {
+    // Rebuild storage with new placement. Partial-load mode keeps no full
+    // expert tensors resident, so we must re-read from the GGUF mmap (the
+    // GPU-tensor variant would read unbuffered tensors and assert).
+    std::shared_ptr<MoeHybridStorage> rebuilt;
+    if (!build_hybrid_storage_from_file(plan.next_placement, rebuilt, err)) {
         std::fprintf(stderr, "[laguna-hybrid] swap rebuild failed: %s\n", err.c_str());
         return;
     }

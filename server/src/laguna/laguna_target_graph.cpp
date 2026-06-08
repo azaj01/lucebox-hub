@@ -18,6 +18,7 @@
 // for 30+ tokens on B-tree prompt; see Lucebox/Laguna-XS.2-GGUF README).
 
 #include "laguna_internal.h"
+#include "../common/moe_hybrid_storage.h"
 #include "common/ggml_graph_precision.h"
 #include "internal.h"
 #include "dflash27b.h"
@@ -303,6 +304,13 @@ static ggml_tensor * build_laguna_dense_ffn(ggml_context * ctx, ggml_tensor * cu
 static ggml_tensor * build_laguna_moe_block_full(ggml_context * ctx, ggml_tensor * cur,
                                                   const LagunaTargetWeights & w,
                                                   const LagunaTargetLayer & L);
+// Forward decl for the hybrid (offload) MoE block (defined further down).
+static ggml_tensor * build_laguna_moe_block_hybrid(ggml_context * ctx, ggml_cgraph * gf, ggml_tensor * cur,
+                                                   const LagunaTargetWeights & w,
+                                                   const LagunaTargetLayer & L,
+                                                   const MoeHybridLayerStorage & hot,
+                                                   ggml_tensor * lut_all, ggml_tensor * vld_all,
+                                                   ggml_tensor * sel_all, int moe_idx);
 
 // MoE block: sigmoid router with score-correction bias, sum-normalize selected
 // weights, scale routed combine by expert_weights_scale (=2.5 for Laguna),
@@ -316,15 +324,21 @@ static ggml_tensor * build_laguna_moe_block_full(ggml_context * ctx, ggml_tensor
 // bias + sum-norm + ggml_mul_mat_id) is Phase 2.1.
 // DEBUG SWITCH: env DFLASH_LAGUNA_MOE_STUB=1 routes to shared-only stub.
 // Default: full MoE.
-static ggml_tensor * build_laguna_moe_block(ggml_context * ctx, ggml_tensor * cur,
+static ggml_tensor * build_laguna_moe_block(ggml_context * ctx, ggml_cgraph * gf, ggml_tensor * cur,
                                              const LagunaTargetWeights & w,
-                                             const LagunaTargetLayer & L) {
+                                             const LagunaTargetLayer & L,
+                                             const LagunaHybridMoe * hyb = nullptr, int il = 0) {
     static const bool stub = (std::getenv("DFLASH_LAGUNA_MOE_STUB") != nullptr);
     if (stub) {
         ggml_tensor * sh_gate = ggml_mul_mat(ctx, L.ffn_gate_shexp, cur);
         ggml_tensor * sh_up   = ggml_mul_mat(ctx, L.ffn_up_shexp,   cur);
         ggml_tensor * sh_gu   = ggml_swiglu_split(ctx, sh_gate, sh_up);
         return ggml_mul_mat(ctx, L.ffn_down_shexp, sh_gu);
+    }
+    if (hyb && hyb->storage) {
+        return build_laguna_moe_block_hybrid(ctx, gf, cur, w, L,
+            hyb->storage->layers[(size_t)il], hyb->lut_all, hyb->vld_all, hyb->sel_all,
+            il - hyb->dense_lead);
     }
     return build_laguna_moe_block_full(ctx, cur, w, L);
 }
@@ -400,6 +414,77 @@ static ggml_tensor * build_laguna_moe_block_full(ggml_context * ctx, ggml_tensor
     }
 
     // Always-on shared expert (SwiGLU).
+    ggml_tensor * sh_gate = ggml_mul_mat(ctx, L.ffn_gate_shexp, cur);
+    ggml_tensor * sh_up   = ggml_mul_mat(ctx, L.ffn_up_shexp,   cur);
+    ggml_tensor * sh_gu   = ggml_swiglu_split(ctx, sh_gate, sh_up);
+    ggml_tensor * shared  = ggml_mul_mat(ctx, L.ffn_down_shexp, sh_gu);
+
+    return ggml_add(ctx, routed, shared);
+}
+
+// Hybrid MoE block: same router as build_laguna_moe_block_full, but the routed
+// experts are served from the bounded hot stack via a global->local LUT, and a
+// validity mask drops (zeroes the combine weight of) any selected expert that
+// is not currently resident. `lut`/`vld` are graph inputs set once per token by
+// laguna_step_hybrid from the cache residency state.
+static ggml_tensor * build_laguna_moe_block_hybrid(ggml_context * ctx, ggml_cgraph * gf, ggml_tensor * cur,
+                                                    const LagunaTargetWeights & w,
+                                                    const LagunaTargetLayer & L,
+                                                    const MoeHybridLayerStorage & hot,
+                                                    ggml_tensor * lut_all,
+                                                    ggml_tensor * vld_all,
+                                                    ggml_tensor * sel_all,
+                                                    int moe_idx) {
+    const int n_tokens = (int)cur->ne[1];
+    const int n_expert = w.n_expert;
+    const int n_used   = w.n_expert_used;
+    const int n_embd   = w.n_embd;
+
+    ggml_tensor * logits = ggml_mul_mat(ctx, L.ffn_gate_inp, cur);
+    ggml_tensor * probs  = ggml_sigmoid(ctx, logits);
+    ggml_tensor * scores_sel = ggml_add(ctx, probs, L.ffn_exp_probs_b);
+    ggml_tensor * selected = ggml_top_k(ctx, scores_sel, n_used);  // [n_used, n_tokens] global ids
+    {   // batched readback: write this layer's selection into column moe_idx of sel_all
+        ggml_tensor * sel_col = ggml_view_2d(ctx, sel_all, n_used, n_tokens,
+                                             sel_all->nb[1], (size_t)moe_idx * sel_all->nb[1]);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx, selected, sel_col));
+    }
+
+    ggml_tensor * probs_3d = ggml_reshape_3d(ctx, probs, 1, n_expert, n_tokens);
+    ggml_tensor * weights  = ggml_get_rows(ctx, probs_3d, selected);
+    weights = ggml_reshape_2d(ctx, weights, n_used, n_tokens);
+    ggml_tensor * w_sum = ggml_sum_rows(ctx, weights);
+    weights = ggml_div(ctx, weights, w_sum);
+    if (w.expert_weights_scale != 1.0f) {
+        weights = ggml_scale(ctx, weights, w.expert_weights_scale);
+    }
+
+    // Per-layer residency LUT/valid = column moe_idx of the shared input tensors.
+    ggml_tensor * lut = ggml_reshape_2d(ctx, ggml_view_1d(ctx, lut_all, n_expert, (size_t)moe_idx * lut_all->nb[1]), 1, n_expert);
+    ggml_tensor * vld = ggml_reshape_2d(ctx, ggml_view_1d(ctx, vld_all, n_expert, (size_t)moe_idx * vld_all->nb[1]), 1, n_expert);
+
+    ggml_tensor * lid = ggml_get_rows(ctx, lut, selected);          // [1, n_used, n_tokens]
+    ggml_tensor * ids = ggml_cont(ctx, ggml_reshape_2d(ctx, lid, n_used, n_tokens));
+    ggml_tensor * vm  = ggml_get_rows(ctx, vld, selected);          // [1, n_used, n_tokens]
+    vm = ggml_reshape_2d(ctx, vm, n_used, n_tokens);
+    weights = ggml_mul(ctx, weights, vm);                          // drop non-resident experts
+
+    ggml_tensor * cur_3d = ggml_reshape_3d(ctx, cur, n_embd, 1, n_tokens);
+    ggml_tensor * gate_e = ggml_mul_mat_id(ctx, hot.gate_hot, cur_3d, ids);
+    ggml_tensor * up_e   = ggml_mul_mat_id(ctx, hot.up_hot,   cur_3d, ids);
+    ggml_tensor * gu     = ggml_swiglu_split(ctx, gate_e, up_e);
+    ggml_tensor * experts = ggml_mul_mat_id(ctx, hot.down_hot, gu, ids);
+
+    ggml_tensor * w_view = ggml_reshape_3d(ctx, weights, 1, n_used, n_tokens);
+    experts = ggml_mul(ctx, experts, w_view);
+
+    ggml_tensor * routed = nullptr;
+    for (int i = 0; i < n_used; ++i) {
+        ggml_tensor * slice = ggml_view_2d(ctx, experts, n_embd, n_tokens,
+            experts->nb[2], (size_t)i * experts->nb[1]);
+        routed = (i == 0) ? slice : ggml_add(ctx, routed, slice);
+    }
+
     ggml_tensor * sh_gate = ggml_mul_mat(ctx, L.ffn_gate_shexp, cur);
     ggml_tensor * sh_up   = ggml_mul_mat(ctx, L.ffn_up_shexp,   cur);
     ggml_tensor * sh_gu   = ggml_swiglu_split(ctx, sh_gate, sh_up);
@@ -637,7 +722,8 @@ static ggml_tensor * build_laguna_layer(
     ggml_tensor * attn_mask,
     int kv_start,
     int n_tokens,
-    ggml_tensor * attn_mask_swa)
+    ggml_tensor * attn_mask_swa,
+    const LagunaHybridMoe * hyb = nullptr)
 {
     const LagunaTargetLayer & L = w.layers[il];
     ggml_tensor * inp_f32 = graph_tensor_f32(ctx, inp);
@@ -660,7 +746,7 @@ static ggml_tensor * build_laguna_layer(
     // Dense MLP (layer 0) or sparse MoE+shared (layers 1..n)
     const bool is_dense = (il < w.n_layer_dense_lead);
     cur = is_dense ? build_laguna_dense_ffn(ctx, cur, L)
-                   : build_laguna_moe_block(ctx, cur, w, L);
+                   : build_laguna_moe_block(ctx, gf, cur, w, L, hyb, il);
 
     return ggml_add(ctx, cur, ffn_inp);
 }
@@ -826,7 +912,7 @@ LagunaGraphOutputs build_laguna_graph(
     for (int il = 0; il < w.n_layer; ++il) {
         cur = build_laguna_layer(ctx, gf, w, cache, il, cur,
                                   in.positions, in.attn_mask, in.kv_start, in.n_tokens,
-                                  in.attn_mask_swa);
+                                  in.attn_mask_swa, in.hybrid);
     }
 
     // Final norm + lm_head
@@ -951,6 +1037,136 @@ bool laguna_step(
                              out_logits.size() * sizeof(float));
 
     cache.cur_pos = kv_len;
+    ggml_free(ctx);
+    return true;
+}
+
+
+// ---- Single-graph hybrid decode forward -----------------------------------
+bool laguna_step_hybrid(
+    ggml_backend_t              backend,
+    const LagunaTargetWeights & w,
+    LagunaTargetCache &         cache,
+    const float *               embed,
+    int                         n_tok,
+    int                         kv_start,
+    bool                        no_mask,
+    const MoeHybridStorage &    hyb,
+    std::vector<float> &        out_logits,
+    std::vector<int32_t> *      out_selected)
+{
+    ggml_init_params ip{};
+    ip.mem_size = ggml_tensor_overhead() * 32768 + ggml_graph_overhead() + 32 * 1024 * 1024;
+    ip.no_alloc = true;
+    ggml_context * ctx = ggml_init(ip);
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx, 32768, false);
+
+    ggml_tensor * ie = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, w.n_embd, n_tok, 1);
+    ggml_set_input(ie);
+    ggml_tensor * pp = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_tok);
+    ggml_set_input(pp);
+
+    ggml_tensor * mk_full = nullptr, * mk_full_cnv = nullptr;
+    ggml_tensor * mk_swa  = nullptr, * mk_swa_cnv  = nullptr;
+    const int kv_len = kv_start + n_tok;
+    if (!no_mask) {
+        mk_full = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, kv_len, n_tok, 1, 1);
+        ggml_set_input(mk_full);
+        mk_full_cnv = ggml_cast(ctx, mk_full, GGML_TYPE_F16);
+        mk_swa = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, kv_len, n_tok, 1, 1);
+        ggml_set_input(mk_swa);
+        mk_swa_cnv = ggml_cast(ctx, mk_swa, GGML_TYPE_F16);
+    }
+
+    const int n_expert = w.n_expert;
+    const int n_used   = w.n_expert_used;
+    const int n_moe    = w.n_layer - w.n_layer_dense_lead;
+    LagunaHybridMoe hybm{};
+    hybm.storage    = &hyb;
+    hybm.dense_lead = w.n_layer_dense_lead;
+    hybm.lut_all = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert, n_moe); ggml_set_input(hybm.lut_all);
+    hybm.vld_all = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_expert, n_moe); ggml_set_input(hybm.vld_all);
+    hybm.sel_all = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_used,  n_moe);  ggml_set_output(hybm.sel_all);
+
+    // Reuse the shared graph builder (same attention / norm / precision path as
+    // the all-GPU decode); the hybrid descriptor swaps MoE layers to the hot
+    // stack via the per-layer LUTs.
+    LagunaGraphInputs gi{};
+    gi.inp_embed        = ie;
+    gi.positions        = pp;
+    gi.attn_mask        = mk_full_cnv;
+    gi.attn_mask_swa    = mk_swa_cnv;
+    gi.n_tokens         = n_tok;
+    gi.kv_start         = kv_start;
+    gi.output_last_only = true;
+    gi.hybrid           = &hybm;
+    LagunaGraphOutputs go = build_laguna_graph(ctx, gf, w, cache, gi);
+    ggml_tensor * logits = go.logits;
+
+    static ggml_gallocr_t galloc_h = nullptr;
+    if (!galloc_h) galloc_h = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+    if (!ggml_gallocr_alloc_graph(galloc_h, gf)) {
+        std::fprintf(stderr, "laguna_step_hybrid: gallocr_alloc_graph failed\n");
+        ggml_free(ctx);
+        return false;
+    }
+
+    ggml_backend_tensor_set(ie, embed, 0, ggml_nbytes(ie));
+    std::vector<int32_t> pos((size_t)n_tok);
+    for (int i = 0; i < n_tok; ++i) pos[i] = kv_start + i;
+    ggml_backend_tensor_set(pp, pos.data(), 0, ggml_nbytes(pp));
+
+    if (!no_mask) {
+        std::vector<float> mfull((size_t)kv_len * n_tok, -INFINITY);
+        for (int q = 0; q < n_tok; ++q) {
+            const int abs_q = kv_start + q;
+            for (int k = 0; k <= abs_q && k < kv_len; ++k) mfull[(size_t)q * kv_len + k] = 0.0f;
+        }
+        ggml_backend_tensor_set(mk_full, mfull.data(), 0, ggml_nbytes(mk_full));
+        std::vector<float> mswa((size_t)kv_len * n_tok, -INFINITY);
+        const int Wsw = w.sliding_window;
+        for (int q = 0; q < n_tok; ++q) {
+            const int abs_q = kv_start + q;
+            const int lo = std::max(0, abs_q - Wsw + 1);
+            for (int k = lo; k <= abs_q && k < kv_len; ++k) mswa[(size_t)q * kv_len + k] = 0.0f;
+        }
+        ggml_backend_tensor_set(mk_swa, mswa.data(), 0, ggml_nbytes(mk_swa));
+    }
+
+    // Set ALL residency LUTs in two batched H2D copies from the hot stack mapping.
+    std::vector<int32_t> lutbuf((size_t)n_expert * (size_t)n_moe);
+    std::vector<float>   vldbuf((size_t)n_expert * (size_t)n_moe);
+    for (int il = w.n_layer_dense_lead; il < w.n_layer; ++il) {
+        const int mi = il - w.n_layer_dense_lead;
+        const MoeHybridLayerStorage & st = hyb.layers[(size_t)il];
+        for (int g = 0; g < n_expert; ++g) {
+            int loc = (g < (int)st.hot_local_by_global.size()) ? st.hot_local_by_global[(size_t)g] : -1;
+            lutbuf[(size_t)mi * n_expert + g] = loc >= 0 ? loc : 0;
+            vldbuf[(size_t)mi * n_expert + g] = loc >= 0 ? 1.0f : 0.0f;
+        }
+    }
+    ggml_backend_tensor_set(hybm.lut_all, lutbuf.data(), 0, sizeof(int32_t) * lutbuf.size());
+    ggml_backend_tensor_set(hybm.vld_all, vldbuf.data(), 0, sizeof(float) * vldbuf.size());
+
+    if (ggml_backend_graph_compute(backend, gf) != GGML_STATUS_SUCCESS) {
+        std::fprintf(stderr, "laguna_step_hybrid: graph_compute failed\n");
+        ggml_free(ctx);
+        return false;
+    }
+
+    out_logits.resize((size_t)w.embedder.n_vocab);
+    ggml_backend_tensor_get(logits, out_logits.data(), 0, out_logits.size() * sizeof(float));
+
+    if (out_selected) {
+        std::vector<int32_t> selbuf((size_t)n_used * (size_t)n_moe);
+        ggml_backend_tensor_get(hybm.sel_all, selbuf.data(), 0, sizeof(int32_t) * selbuf.size());
+        out_selected->assign((size_t)w.n_layer * (size_t)n_used, -1);
+        for (int il = w.n_layer_dense_lead; il < w.n_layer; ++il) {
+            const int mi = il - w.n_layer_dense_lead;
+            for (int k = 0; k < n_used; ++k)
+                (*out_selected)[(size_t)il * n_used + k] = selbuf[(size_t)mi * n_used + k];
+        }
+    }
     ggml_free(ctx);
     return true;
 }

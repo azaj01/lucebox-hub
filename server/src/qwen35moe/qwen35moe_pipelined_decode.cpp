@@ -294,6 +294,11 @@ bool pipelined_decode_one_token(
             float   cold_weights[8];
             int n_cold = 0;
             int layer_cold_hits = 0;
+            // Spark expert cache: pull selected cold experts into spare GPU slots
+            // (LRU) so the lookup below serves them on-GPU; after warmup cold->0.
+            if (storage.cache_slots > 0)
+                for (int i = 0; i < n_expert_used; ++i)
+                    dflash::common::moe_hybrid_cache_swap_in(storage, global_ids[i], backend);
             for (int i = 0; i < n_expert_used; ++i) {
                 int32_t gid = global_ids[i];
                 int32_t lid = (gid >= 0 && gid < (int)storage.hot_local_by_global.size())
@@ -484,6 +489,10 @@ bool pipelined_decode_one_token(
             float   cold_weights[8];
             int n_cold = 0;
             int layer_cold_hits = 0;
+            // Spark expert cache: pull selected cold experts into spare GPU slots.
+            if (storage.cache_slots > 0)
+                for (int i = 0; i < n_expert_used; ++i)
+                    dflash::common::moe_hybrid_cache_swap_in(storage, state.routing_ids_buf[(size_t)i], backend);
             for (int i = 0; i < n_expert_used; ++i) {
                 int32_t gid = state.routing_ids_buf[(size_t)i];
                 int32_t lid = (gid >= 0 && gid < (int)storage.hot_local_by_global.size())

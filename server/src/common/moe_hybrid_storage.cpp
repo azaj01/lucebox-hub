@@ -1,6 +1,8 @@
 #include "moe_hybrid_storage.h"
 
 #include "ggml-cpu.h"
+#include "ggml-backend.h"
+#include "ggml-cuda.h"
 
 #include <algorithm>
 #include <cstring>
@@ -267,7 +269,7 @@ bool build_moe_hybrid_storage(const MoeHybridConfig & cfg,
                 dst.up_cold   = new_like_with_expert_count(dst.cold_ctx, desc.ffn_up_exps, cold_count);
                 dst.down_cold = new_like_with_expert_count(dst.cold_ctx, desc.ffn_down_exps, cold_count);
             }
-            dst.cold_buf = ggml_backend_alloc_ctx_tensors(dst.cold_ctx, out.cpu_backend);
+            dst.cold_buf = ggml_backend_alloc_ctx_tensors_from_buft(dst.cold_ctx, ggml_backend_cuda_host_buffer_type());
             if (!dst.cold_buf) {
                 if (err) *err = "failed to allocate cold expert buffer";
                 return false;
@@ -310,7 +312,8 @@ bool build_moe_hybrid_storage_from_file(
     const std::vector<MoeLayerDesc> & layer_descs,
     const std::vector<LayerExpertFileData> & file_data,
     MoeHybridStorage & out,
-    std::string * err) {
+    std::string * err,
+    int cache_slots) {
 
     if (!placement.matches(cfg)) {
         if (err) *err = "placement does not match config";
@@ -371,6 +374,13 @@ bool build_moe_hybrid_storage_from_file(
 
         const int hot_count = (int)dst.hot_expert_ids.size();
         const int cold_count = (int)dst.cold_expert_ids.size();
+        const int spare = (cold_count > 0 && cache_slots > 0)
+                          ? std::min(cache_slots, cold_count) : 0;
+        const int hot_alloc = hot_count + spare;
+        dst.hot_active  = hot_count;
+        dst.cache_slots = spare;
+        dst.spare_global.assign((size_t)spare, -1);
+        dst.spare_lru.assign((size_t)spare, 0);
 
         // Allocate hot expert tensors on GPU
         if (hot_count > 0) {
@@ -384,12 +394,12 @@ bool build_moe_hybrid_storage_from_file(
                 return false;
             }
             if (dst.fused_gate_up) {
-                dst.gate_up_hot = new_like_with_expert_count(dst.hot_ctx, desc.ffn_gate_up_exps, hot_count);
-                dst.down_hot    = new_like_with_expert_count(dst.hot_ctx, desc.ffn_down_exps, hot_count);
+                dst.gate_up_hot = new_like_with_expert_count(dst.hot_ctx, desc.ffn_gate_up_exps, hot_alloc);
+                dst.down_hot    = new_like_with_expert_count(dst.hot_ctx, desc.ffn_down_exps, hot_alloc);
             } else {
-                dst.gate_hot = new_like_with_expert_count(dst.hot_ctx, desc.ffn_gate_exps, hot_count);
-                dst.up_hot   = new_like_with_expert_count(dst.hot_ctx, desc.ffn_up_exps, hot_count);
-                dst.down_hot = new_like_with_expert_count(dst.hot_ctx, desc.ffn_down_exps, hot_count);
+                dst.gate_hot = new_like_with_expert_count(dst.hot_ctx, desc.ffn_gate_exps, hot_alloc);
+                dst.up_hot   = new_like_with_expert_count(dst.hot_ctx, desc.ffn_up_exps, hot_alloc);
+                dst.down_hot = new_like_with_expert_count(dst.hot_ctx, desc.ffn_down_exps, hot_alloc);
             }
             dst.hot_buf = ggml_backend_alloc_ctx_tensors(dst.hot_ctx, gpu_backend);
             if (!dst.hot_buf) {
@@ -445,7 +455,7 @@ bool build_moe_hybrid_storage_from_file(
                 dst.up_cold   = new_like_with_expert_count(dst.cold_ctx, desc.ffn_up_exps, cold_count);
                 dst.down_cold = new_like_with_expert_count(dst.cold_ctx, desc.ffn_down_exps, cold_count);
             }
-            dst.cold_buf = ggml_backend_alloc_ctx_tensors(dst.cold_ctx, out.cpu_backend);
+            dst.cold_buf = ggml_backend_alloc_ctx_tensors_from_buft(dst.cold_ctx, ggml_backend_cuda_host_buffer_type());
             if (!dst.cold_buf) {
                 if (err) *err = "failed to allocate cold expert CPU buffer";
                 return false;
@@ -479,6 +489,85 @@ bool build_moe_hybrid_storage_from_file(
     }
 
     return true;
+}
+
+
+int moe_hybrid_cache_swap_in(MoeHybridLayerStorage & st, int global_expert,
+                             ggml_backend_t gpu_backend) {
+    if (global_expert < 0 || global_expert >= (int)st.hot_local_by_global.size()) return -1;
+    const int existing = st.hot_local_by_global[(size_t)global_expert];
+    if (existing >= 0) {  // already resident (pinned-hot or cached)
+        if (existing >= st.hot_active && st.cache_slots > 0) {
+            const int sl = existing - st.hot_active;
+            if (sl >= 0 && sl < st.cache_slots) st.spare_lru[(size_t)sl] = ++st.lru_clock;
+        }
+        return existing;
+    }
+    if (st.cache_slots <= 0) return -1;  // no cache
+    const int cold_local = st.cold_local_by_global[(size_t)global_expert];
+    if (cold_local < 0) return -1;       // not a cold expert
+    // Validate the tensors for whichever expert layout this model uses.
+    if (st.fused_gate_up) {
+        if (!st.gate_up_hot || !st.down_hot || !st.gate_up_cold || !st.down_cold) return -1;
+    } else {
+        if (!st.gate_hot || !st.up_hot || !st.down_hot ||
+            !st.gate_cold || !st.up_cold || !st.down_cold) return -1;
+    }
+
+    // Pick a free spare slot, else evict the LRU one.
+    int slot = -1; uint64_t best = (uint64_t)-1;
+    for (int i = 0; i < st.cache_slots; ++i) {
+        if (st.spare_global[(size_t)i] < 0) { slot = i; break; }
+        if (st.spare_lru[(size_t)i] < best) { best = st.spare_lru[(size_t)i]; slot = i; }
+    }
+    if (slot < 0) return -1;
+    const int evicted = st.spare_global[(size_t)slot];
+    if (evicted >= 0) st.hot_local_by_global[(size_t)evicted] = -1;  // evicted -> served cold again
+
+    const int hslot = st.hot_active + slot;  // hot-local index of the spare slot
+    auto copy_slice = [&](ggml_tensor * cold_t, ggml_tensor * hot_t, size_t ebytes) {
+        const uint8_t * src = (const uint8_t *)cold_t->data + (size_t)cold_local * ebytes;
+        // Pinned cold store + async H2D on cudaStreamPerThread -> overlaps the
+        // compute stream. Pinned makes cudaMemcpyAsync truly asynchronous.
+        ggml_backend_tensor_set_async(gpu_backend, hot_t, src, (size_t)hslot * ebytes, ebytes);
+    };
+    if (st.fused_gate_up) {
+        copy_slice(st.gate_up_cold, st.gate_up_hot, st.gate_up_expert_bytes);
+        copy_slice(st.down_cold,    st.down_hot,    st.down_expert_bytes);
+    } else {
+        copy_slice(st.gate_cold, st.gate_hot, st.gate_expert_bytes);
+        copy_slice(st.up_cold,   st.up_hot,   st.up_expert_bytes);
+        copy_slice(st.down_cold, st.down_hot, st.down_expert_bytes);
+    }
+
+    st.hot_local_by_global[(size_t)global_expert] = hslot;
+    st.spare_global[(size_t)slot] = global_expert;
+    st.spare_lru[(size_t)slot] = ++st.lru_clock;
+    return hslot;
+}
+
+MoeSparkBudget spark_budget_split(uint64_t expert_budget, uint64_t total_expert_bytes,
+                                  int n_expert, uint64_t core_kv_safety,
+                                  uint64_t target_bytes) {
+    if (target_bytes > 0) {
+        const uint64_t avail = target_bytes > core_kv_safety ? target_bytes - core_kv_safety : 0;
+        if (avail < expert_budget) expert_budget = avail;
+    }
+    MoeSparkBudget r{expert_budget, 0};
+    if (n_expert > 0 && total_expert_bytes > 0 && expert_budget > 0) {
+        const uint64_t bytes_per_slot = total_expert_bytes / (uint64_t)n_expert;  // 1 expert, all layers
+        if (bytes_per_slot > 0) {
+            uint64_t reserve = expert_budget / 8;             // ~12% for the cache ring
+            const uint64_t cap = 1536ULL * 1024 * 1024;       // capped at 1.5 GiB
+            if (reserve > cap) reserve = cap;
+            const int slots = (int)(reserve / bytes_per_slot);
+            if (slots > 0) {
+                r.cache_slots = slots;
+                r.hot_bytes = expert_budget - (uint64_t)slots * bytes_per_slot;
+            }
+        }
+    }
+    return r;
 }
 
 }  // namespace dflash::common

@@ -246,6 +246,23 @@ many hot experts as the budget allows and routes the rest to CPU. You can also
 shrink the budget manually to force a split (e.g. to free VRAM for a longer
 context or a larger target).
 
+### Spark: one-flag autotune (recommended)
+
+`--spark` turns the split into a self-tuning command: it enables the bounded
+GPU expert cache, sizes it from the VRAM target, loads a placement profile
+next to the model (`<model>.gguf.spark.csv`) if present, and keeps refining it
+from live traffic across restarts. Cap total VRAM with `--spark-vram <GiB>`.
+
+```bash
+dflash_server models/laguna-xs2-Q4_K_M.gguf --spark                # size to the card
+dflash_server models/laguna-xs2-Q4_K_M.gguf --spark --spark-vram 14
+```
+
+Under offload, laguna decodes the whole token in **one fused graph**
+(`laguna_step_hybrid`), so throughput stays near the all-GPU ceiling (e.g.
+~100 tok/s at 60% residency vs ~118 all-GPU on an RTX 3090); set
+`DFLASH_LAGUNA_NO_SINGLE_GRAPH=1` to fall back to the per-layer path.
+
 ### Budget knobs
 
 | Env | Arch | Effect |
@@ -266,6 +283,19 @@ Substitute `<ARCH>` = `LAGUNA` or `QWEN35MOE`:
 | `DFLASH_<ARCH>_SWAP_MIN_GAIN N` | Min observed-frequency gain before a cold expert is promoted to hot. |
 | `DFLASH_<ARCH>_NEXT_PLACEMENT_OUT <file>` | Dump the placement chosen this run (warm-start the hotness file next time). |
 | `DFLASH_QWEN35MOE_RUNTIME_STATS_OUT <file>` | (qwen only) Dump runtime routing-frequency stats. |
+
+### Cache + single-graph knobs
+
+Substitute `<ARCH>` = `LAGUNA` or `QWEN35MOE`. `--spark` sets these for you.
+
+| Env | Effect |
+|---|---|
+| `DFLASH_SPARK 1` | Enable the autotuning Spark path (set by `--spark`). |
+| `DFLASH_SPARK_VRAM_MB N` | Total VRAM target Spark sizes the hot tier + cache to (set by `--spark-vram`). |
+| `DFLASH_<ARCH>_EXPERT_CACHE 1` | Bounded GPU expert cache: swap selected cold experts into spare slots (LRU) so they are served on-GPU; cold-miss falls toward 0 after warmup. |
+| `DFLASH_<ARCH>_CACHE_SLOTS N` | Cache slots per layer (default: auto-sized from the VRAM target). |
+| `DFLASH_LAGUNA_GPU_REMAP 1` | Serve the cache through the unified on-GPU FFN (required for the laguna cache to take effect). |
+| `DFLASH_LAGUNA_NO_SINGLE_GRAPH 1` | Fall back to per-layer decode instead of the default single-graph hybrid. |
 
 ### Example
 
