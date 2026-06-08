@@ -91,13 +91,16 @@ cache to ~0; the single-graph fused decode (`laguna_step_hybrid`, default-on) is
 holds **~100 tok/s at 60% residency**. Peak VRAM at the operating point (60% hot
 + 32 cache slots) measured at **14.59 GiB**: a 33B-total MoE under 16 GiB.
 
-**Both backends, same idea.** `--spark` works for laguna and qwen35moe alike;
-peak VRAM on the RTX 3090, Q4_K_M:
+**Both backends, same idea.** `--spark` works for laguna and qwen35moe alike.
+RTX 3090, Q4_K_M, decode at the Spark operating point (both under 16 GiB):
 
-| Model | All-GPU | Spark | Fits 16 GB |
-|---|---:|---:|:---:|
-| Laguna XS.2 (33B-A3B) | 18.8 GiB | **14.6 GiB** | yes |
-| Qwen3.6 35B-A3B | ~20.5 GiB | **13.3 GiB** | yes |
+| Model | VRAM: all-GPU → Spark | decode: all-GPU → Spark | speed kept |
+|---|---|---|---:|
+| Laguna XS.2 (33B-A3B) | 18.8 → **14.6 GiB** | 119 → **100 tok/s** | 85% |
+| Qwen3.6 35B-A3B | ~20.5 → **13.3 GiB** | 108 → **100 tok/s** | 92% |
+
+Qwen keeps more of its all-GPU speed: its expert offload hides the cold fetches
+even at ~50% residency, where laguna leans on the fused single-graph decode.
 
 ## How it works
 
